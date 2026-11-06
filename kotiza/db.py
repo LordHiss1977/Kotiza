@@ -15,6 +15,8 @@ All percentages are stored as plain numbers (55 means 55%).
 import os
 import sqlite3
 
+from . import rates_pa
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS units (
     id      INTEGER PRIMARY KEY,
@@ -26,8 +28,22 @@ CREATE TABLE IF NOT EXISTS labor (
     id          INTEGER PRIMARY KEY,
     code        TEXT NOT NULL UNIQUE,
     trade       TEXT NOT NULL,
-    base_rate   REAL NOT NULL DEFAULT 0,   -- wage per hour
-    burden_pct  REAL NOT NULL DEFAULT 0    -- social charges, benefits, etc.
+    category    TEXT NOT NULL DEFAULT '',  -- e.g. convention wage category
+    base_rate   REAL NOT NULL DEFAULT 0,   -- wage per hour (private works)
+    public_rate REAL NOT NULL DEFAULT 0,   -- wage per hour on public works (0 = same)
+    use_standard_burden INTEGER NOT NULL DEFAULT 1,  -- 1 = use burden calculator
+    burden_pct  REAL NOT NULL DEFAULT 0    -- custom burden when not standard
+);
+
+-- Standard labor burden (cargas sociales y prestaciones) - see rates_pa.py
+CREATE TABLE IF NOT EXISTS burden_components (
+    id       INTEGER PRIMARY KEY,
+    sort     INTEGER NOT NULL DEFAULT 0,
+    name     TEXT NOT NULL,
+    kind     TEXT NOT NULL DEFAULT 'charge' CHECK (kind IN ('leave', 'charge')),
+    percent  REAL NOT NULL DEFAULT 0,
+    active   INTEGER NOT NULL DEFAULT 1,
+    notes    TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS equipment (
@@ -108,6 +124,8 @@ CREATE TABLE IF NOT EXISTS estimates (
     location         TEXT NOT NULL DEFAULT '',
     estimate_date    TEXT NOT NULL DEFAULT '',
     currency         TEXT NOT NULL DEFAULT 'USD',
+    wage_scale       TEXT NOT NULL DEFAULT 'private'
+                     CHECK (wage_scale IN ('private', 'public')),
     status           TEXT NOT NULL DEFAULT 'draft',
     hours_per_day    REAL NOT NULL DEFAULT 8,
     contingency_pct  REAL NOT NULL DEFAULT 0,
@@ -172,13 +190,66 @@ def connect(path=None):
     return conn
 
 
+# Columns added after the first release: (table, column, definition).
+# Existing databases get them via ALTER TABLE on startup.
+MIGRATIONS = [
+    ("labor", "category", "TEXT NOT NULL DEFAULT ''"),
+    ("labor", "public_rate", "REAL NOT NULL DEFAULT 0"),
+    # Existing trades keep their own burden % until switched to standard.
+    ("labor", "use_standard_burden", "INTEGER NOT NULL DEFAULT 0"),
+    ("estimates", "wage_scale", "TEXT NOT NULL DEFAULT 'private'"),
+]
+
+
+def migrate(conn):
+    for table, col, ddl in MIGRATIONS:
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+
+
 def init_db(conn, seed=True):
-    """Create tables; load sample data if the database is empty."""
+    """Create tables, upgrade older databases, load sample data if empty."""
     conn.executescript(SCHEMA)
+    migrate(conn)
+    if conn.execute("SELECT COUNT(*) FROM burden_components").fetchone()[0] == 0:
+        seed_burden(conn)
     empty = conn.execute("SELECT COUNT(*) FROM labor").fetchone()[0] == 0
     if seed and empty:
         seed_sample_data(conn)
     conn.commit()
+
+
+def seed_burden(conn):
+    conn.executemany(
+        "INSERT INTO burden_components(sort, name, kind, percent, notes) VALUES (?,?,?,?,?)",
+        rates_pa.BURDEN_COMPONENTS)
+
+
+def standard_burden_pct(conn):
+    comps = [dict(r) for r in conn.execute("SELECT kind, percent, active FROM burden_components")]
+    return rates_pa.total_burden(comps)[2]
+
+
+def load_capac_rates(conn):
+    """Insert or update the convention trades (matched by code).
+    Returns (inserted, updated)."""
+    ins = upd = 0
+    for code, trade, category, _note in rates_pa.TRADES:
+        priv, pub = rates_pa.CATEGORY_RATES[category]
+        row = conn.execute("SELECT id FROM labor WHERE code = ?", (code,)).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE labor SET trade = ?, category = ?, base_rate = ?, public_rate = ?,"
+                " use_standard_burden = 1 WHERE id = ?", (trade, category, priv, pub, row[0]))
+            upd += 1
+        else:
+            conn.execute(
+                "INSERT INTO labor(code, trade, category, base_rate, public_rate,"
+                " use_standard_burden, burden_pct) VALUES (?,?,?,?,?,1,0)",
+                (code, trade, category, priv, pub))
+            ins += 1
+    return ins, upd
 
 
 # --------------------------------------------------------------------------
@@ -196,18 +267,11 @@ def seed_sample_data(conn):
     ]
     c.executemany("INSERT INTO units(code, name) VALUES (?, ?)", units)
 
-    labor = [
-        ("FOR", "Foreman (capataz)", 8.00, 55),
-        ("MAS", "Mason (albañil)", 5.50, 55),
-        ("CAR", "Carpenter (carpintero)", 5.50, 55),
-        ("IRW", "Ironworker (armador)", 5.50, 55),
-        ("HLP", "Helper (ayudante)", 3.75, 55),
-        ("OPR", "Equipment operator", 6.75, 55),
-        ("ELE", "Electrician", 6.50, 55),
-        ("PLU", "Plumber (plomero)", 6.00, 55),
-    ]
-    c.executemany(
-        "INSERT INTO labor(code, trade, base_rate, burden_pct) VALUES (?,?,?,?)", labor)
+    # Foreman is not a convention category - set your own rate.
+    c.execute(
+        "INSERT INTO labor(code, trade, category, base_rate, public_rate, use_standard_burden,"
+        " burden_pct) VALUES ('FOR', 'Capataz (foreman)', 'Fuera de convención', 8.00, 8.00, 1, 0)")
+    load_capac_rates(conn)
 
     equipment = [
         ("MIX", "Concrete mixer, 1 bag", 4.00),

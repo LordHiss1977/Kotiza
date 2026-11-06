@@ -293,6 +293,9 @@ function drawEstimate() {
             field('Status', h('select', {
               dataset: { fk: 'est-status' }, onchange: (ev) => saveEstimateField('status', ev.target.value),
             }, options(STATUSES.map((s) => ({ value: s, label: s })), e.status))),
+            field('Wage scale (CAPAC–SUNTRACS)', h('select', {
+              dataset: { fk: 'est-wage_scale' }, onchange: (ev) => saveEstimateField('wage_scale', ev.target.value),
+            }, options([{ value: 'private', label: 'Private works (inversión privada)' }, { value: 'public', label: 'Public works (inversión pública)' }], e.wage_scale))),
             est('hours_per_day', 'Working hours / day', 'num'),
             est('notes', 'Notes / scope assumptions', 'textarea', 'wide'))),
         drawTasksPanel(),
@@ -793,7 +796,7 @@ async function renderCrews() {
   $app.replaceChildren(
     h('div', { class: 'page-head' },
       h('div', {}, h('h1', {}, 'Crews'),
-        h('div', { class: 'sub' }, 'A crew combines labor trades and equipment into one hourly cost. Tasks use a crew at a production rate.')),
+        h('div', { class: 'sub' }, 'A crew combines labor trades and equipment into one hourly cost. Tasks use a crew at a production rate. Costs shown at private-works wages; estimates set to public works use public wages.')),
       h('button', { class: 'primary', onclick: () => editCrew(null) }, '+ New crew')),
     h('div', { class: 'panel' }, h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', {}, 'Code'), h('th', {}, 'Name'), h('th', {}, 'Composition'),
@@ -940,15 +943,30 @@ async function renderLibrary() {
 
 const SIMPLE = {
   labor: {
-    title: 'Labor trades', path: '/labor',
-    hint: 'Base hourly wage plus burden % (social security, benefits, vacation, 13th month, insurance…). Loaded rate is what crews use.',
+    title: 'Labor trades', path: '/labor', search: true,
+    hint: 'Hourly wage (private and public works) plus burden. Trades on “Standard” burden use the calculator above; the loaded rate is what crews cost.',
+    tableTitle: 'Trades',
+    before: renderBurdenPanels,
+    headActions: (reload) => h('button', {
+      class: 'primary', onclick: async () => {
+        if (!confirmBox('Load the CAPAC–SUNTRACS convention wages?\n\nTrades are matched by code (HLP, PRI, MAS, CAR, IRW, PLU, ELE, WEL, PNT, OPR). Existing ones get updated wages and switch to Standard burden; missing ones are added. Other trades are not touched.')) return;
+        const r = await attempt(() => api('POST', '/labor/load-capac'));
+        toast(`CAPAC–SUNTRACS rates loaded: ${r.updated} updated, ${r.inserted} added`);
+        reload();
+      },
+    }, 'Load CAPAC–SUNTRACS rates'),
     cols: [
-      { f: 'code', label: 'Code', w: 100 }, { f: 'trade', label: 'Trade' },
-      { f: 'base_rate', label: 'Base wage / hr', num: true, w: 130 },
-      { f: 'burden_pct', label: 'Burden %', num: true, w: 110 },
-      { calc: (r) => money(num(r.base_rate) * (1 + num(r.burden_pct) / 100)), label: 'Loaded / hr' },
+      { f: 'code', label: 'Code', w: 80 }, { f: 'trade', label: 'Trade' },
+      { f: 'category', label: 'Category', w: 150, list: 'labor-cats' },
+      { f: 'base_rate', label: 'Wage / hr private', num: true, w: 105 },
+      { f: 'public_rate', label: 'Wage / hr public', num: true, w: 105 },
+      { f: 'use_standard_burden', label: 'Burden', w: 115, select: [['1', 'Standard'], ['0', 'Custom']] },
+      { f: 'burden_pct', label: 'Custom %', num: true, w: 85, disabled: (r) => String(r.use_standard_burden) === '1' },
+      { calc: (r) => (r.effective_burden === undefined ? '' : fmtN(r.effective_burden, 2) + '%'), label: 'Burden used' },
+      { calc: (r) => (r.loaded_rate === undefined ? '' : money(r.loaded_rate)), label: 'Loaded private' },
+      { calc: (r) => (r.loaded_public === undefined ? '' : money(r.loaded_public)), label: 'Loaded public' },
     ],
-    blank: { code: '', trade: '', base_rate: 0, burden_pct: 55 },
+    blank: { code: '', trade: '', category: 'Calificado', base_rate: 0, public_rate: 0, use_standard_burden: 1, burden_pct: 0 },
   },
   equipment: {
     title: 'Equipment', path: '/equipment',
@@ -993,20 +1011,23 @@ const SIMPLE = {
 };
 
 let simpleFilter = '';
+let simpleFilterKey = '';
 
 async function renderSimple(key) {
   const def = SIMPLE[key];
+  if (simpleFilterKey !== key) { simpleFilter = ''; simpleFilterKey = key; }
   money = moneyFmt('USD');
   const [rows] = await Promise.all([api('GET', def.path), loadRefs('units')]);
   const fresh = { ...def.blank };
 
   const input = (row, col, onChange) => {
     const fk = `s-${row.id || 'new'}-${col.f}`;
+    const disabled = col.disabled ? col.disabled(row) : false;
     if (col.select) {
-      return h('select', { dataset: { fk }, onchange: onChange }, options(col.select.map(([v, l]) => ({ value: v, label: l })), row[col.f]));
+      return h('select', { dataset: { fk }, disabled, onchange: onChange }, options(col.select.map(([v, l]) => ({ value: v, label: l })), row[col.f]));
     }
-    if (col.num) return numInput(row[col.f], { dataset: { fk }, onchange: onChange });
-    return h('input', { value: row[col.f], list: col.units ? 'units-list' : null, dataset: { fk }, onchange: onChange });
+    if (col.num) return numInput(row[col.f], { dataset: { fk }, disabled, onchange: onChange });
+    return h('input', { value: row[col.f], list: col.units ? 'units-list' : col.list || null, dataset: { fk }, disabled, onchange: onChange });
   };
 
   const q = simpleFilter.toLowerCase();
@@ -1018,7 +1039,10 @@ async function renderSimple(key) {
 
   const newRow = h('tr', { class: 'dirty' },
     def.cols.map((c) => h('td', { style: c.w ? `width:${c.w}px` : null },
-      c.calc ? '' : input(fresh, c, (ev) => { fresh[c.f] = ev.target.value; }))),
+      c.calc ? '' : input(fresh, c, (ev) => {
+        fresh[c.f] = ev.target.value;
+        if (c.select) { const d = ev.target.closest('tr').querySelectorAll('input'); d.forEach((el) => { const cc = def.cols.find((x) => `s-new-${x.f}` === el.dataset.fk); if (cc && cc.disabled) el.disabled = cc.disabled(fresh); }); }
+      }))),
     h('td', { class: 'actions-cell' }, h('button', {
       class: 'primary icon', onclick: async () => {
         await attempt(() => api('POST', def.path, fresh), 'Added');
@@ -1041,18 +1065,91 @@ async function renderSimple(key) {
       },
     }, '✕'))));
 
+  const before = def.before ? await def.before(reload) : null;
   $app.replaceChildren(
     unitDatalist(),
+    h('datalist', { id: 'labor-cats' }, ['Ayudante general', 'Principiante', 'Calificado', 'Fuera de convención'].map((c) => h('option', { value: c }))),
     h('div', { class: 'page-head' },
       h('div', {}, h('h1', {}, def.title), h('div', { class: 'sub' }, def.hint)),
-      def.search ? h('input', {
-        placeholder: 'Search…', style: 'width:240px', value: simpleFilter, dataset: { fk: 'search' },
-        oninput: (ev) => { simpleFilter = ev.target.value; reload(); },
-      }) : null),
-    h('div', { class: 'panel' }, h('div', { class: 'table-wrap' }, h('table', {},
+      h('div', { class: 'actions' },
+        def.search ? h('input', {
+          placeholder: 'Search…', style: 'width:240px', value: simpleFilter, dataset: { fk: 'search' },
+          oninput: (ev) => { simpleFilter = ev.target.value; reload(); },
+        }) : null,
+        def.headActions ? def.headActions(reload) : null)),
+    ...(before || []),
+    h('div', { class: 'panel' },
+      def.tableTitle ? h('div', { class: 'panel-head' }, h('h2', {}, def.tableTitle)) : null,
+      h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, def.cols.map((c) => h('th', { class: c.num || c.calc ? 'n' : '' }, c.label)), h('th', {}))),
       h('tbody', {}, newRow, bodyRows)))),
     h('div', { class: 'hint' }, 'Edits save automatically when you leave a field. The highlighted top row adds a new record.'));
+}
+
+
+// ---------------------------------------------------------------- labor burden (Panama)
+
+async function renderBurdenPanels(reload) {
+  const b = await api('GET', '/burden');
+  const save = (c, f) => async (ev) => {
+    const v = ev.target.type === 'checkbox' ? (ev.target.checked ? 1 : 0) : ev.target.value;
+    try { await attempt(() => api('PUT', `/burden-components/${c.id}`, { [f]: v }), 'Saved'); } finally { reload(); }
+  };
+  const rows = b.components.map((c) => h('tr', { class: c.active ? '' : 'subtle' },
+    h('td', { style: 'width:40px;text-align:center' }, h('input', { type: 'checkbox', checked: !!c.active, style: 'width:auto', title: 'Include', onchange: save(c, 'active') })),
+    h('td', {}, h('input', { value: c.name, dataset: { fk: `b-${c.id}-n` }, onchange: save(c, 'name') })),
+    h('td', { style: 'width:130px' }, h('select', { dataset: { fk: `b-${c.id}-k` }, onchange: save(c, 'kind') },
+      options([{ value: 'leave', label: 'Paid leave' }, { value: 'charge', label: 'Charge' }], c.kind))),
+    h('td', { style: 'width:90px' }, numInput(c.percent, { dataset: { fk: `b-${c.id}-p` }, onchange: save(c, 'percent') })),
+    h('td', {}, h('input', { value: c.notes, dataset: { fk: `b-${c.id}-o` }, onchange: save(c, 'notes') })),
+    h('td', { class: 'actions-cell' }, h('button', {
+      class: 'icon danger', onclick: async () => {
+        if (!confirmBox(`Remove “${c.name}” from the burden?`)) return;
+        await attempt(() => api('DELETE', `/burden-components/${c.id}`), 'Removed');
+        reload();
+      },
+    }, '✕'))));
+
+  const cats = Object.entries(b.category_rates);
+  return [
+    h('div', { class: 'panel' },
+      h('div', { class: 'panel-head' },
+        h('h2', {}, 'Standard labor burden — cargas sociales y prestaciones'),
+        h('div', { class: 'actions' },
+          h('button', {
+            onclick: async () => {
+              await attempt(() => api('POST', '/burden-components', { name: 'New item', kind: 'charge', percent: 0, sort: 900 }));
+              reload();
+            },
+          }, '+ Add item'),
+          h('button', {
+            onclick: async () => {
+              if (!confirmBox('Replace all burden items with the Panama defaults?')) return;
+              await attempt(() => api('POST', '/burden/reset'), 'Reset to defaults');
+              reload();
+            },
+          }, 'Reset to Panama defaults'))),
+      h('div', { class: 'table-wrap' }, h('table', {},
+        h('thead', {}, h('tr', {}, h('th', {}, 'Use'), h('th', {}, 'Item'), h('th', {}, 'Applies to'),
+          h('th', { class: 'n' }, '%'), h('th', {}, 'Basis / notes'), h('th', {}))),
+        h('tbody', {}, rows))),
+      h('div', { class: 'preview-box' },
+        h('div', {}, h('span', {}, 'Paid leave (L)'), h('b', {}, fmtN(b.leave_pct, 2) + '%')),
+        h('div', {}, h('span', {}, 'Charges (C)'), h('b', {}, fmtN(b.charge_pct, 2) + '%')),
+        h('div', {}, h('span', {}, 'Standard burden = L + (1+L)·C'), h('b', { style: 'font-size:18px' }, fmtN(b.total_pct, 2) + '%')),
+        h('div', {}, h('span', {}, 'Calificado private, loaded'), h('b', {}, money((b.category_rates.Calificado || [0])[0] * (1 + b.total_pct / 100)) + '/hr'))),
+      h('div', { class: 'hint', style: 'margin-top:8px' },
+        'Paid leave is time paid but not worked, so it is spread over the hours actually worked. Charges (CSS, seguro educativo, riesgos profesionales, XIII mes, prima de antigüedad…) apply to wage plus paid leave. Defaults are a starting point: confirm them with your accountant and your CSS statement.')),
+    h('div', { class: 'panel' },
+      h('div', { class: 'panel-head' },
+        h('h2', {}, 'Convention reference'),
+        h('span', { class: 'hint' }, `${b.convention.name} — ${b.convention.step}`)),
+      h('table', { style: 'max-width:620px' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Category'), h('th', { class: 'n' }, 'Private works / hr'), h('th', { class: 'n' }, 'Public works / hr'))),
+        h('tbody', {}, cats.map(([name, [pv, pb]]) => h('tr', {}, h('td', {}, name), h('td', { class: 'n' }, money(pv)), h('td', { class: 'n' }, money(pb)))))),
+      h('div', { class: 'hint', style: 'margin-top:8px' },
+        'Category-level minimums. The official table lists individual occupations, some of them above these rates: verify each trade against the signed table and update the wages below.')),
+  ];
 }
 
 // ---------------------------------------------------------------- start

@@ -165,5 +165,50 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(code, 409)
 
 
+class PanamaLaborTests(unittest.TestCase):
+    def test_burden_formula(self):
+        from kotiza import rates_pa
+        comps = [{"kind": "leave", "percent": 10}, {"kind": "charge", "percent": 20},
+                 {"kind": "charge", "percent": 50, "active": 0}]
+        leave, charge, total = rates_pa.total_burden(comps)
+        self.assertAlmostEqual(total, 10 + 1.1 * 20)
+        _, _, default_total = rates_pa.total_burden(
+            [{"kind": k, "percent": p} for _, _, k, p, _ in rates_pa.BURDEN_COMPONENTS])
+        self.assertTrue(40 < default_total < 60)
+
+    def test_migrates_old_database(self):
+        with tempfile.TemporaryDirectory() as d:
+            conn = db.connect(os.path.join(d, "old.db"))
+            conn.executescript("""
+                CREATE TABLE labor (id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE,
+                    trade TEXT NOT NULL, base_rate REAL NOT NULL DEFAULT 0,
+                    burden_pct REAL NOT NULL DEFAULT 0);
+                INSERT INTO labor(code, trade, base_rate, burden_pct) VALUES ('MAS', 'Mason', 5.5, 55);
+                CREATE TABLE estimates (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+            """)
+            db.init_db(conn)
+            row = conn.execute("SELECT * FROM labor WHERE code = 'MAS'").fetchone()
+            self.assertEqual(row["use_standard_burden"], 0)   # keeps its custom 55%
+            self.assertGreater(conn.execute("SELECT COUNT(*) FROM burden_components").fetchone()[0], 0)
+            ins, upd = db.load_capac_rates(conn)
+            self.assertEqual(upd, 1)
+            self.assertGreater(ins, 0)
+            row = conn.execute("SELECT * FROM labor WHERE code = 'MAS'").fetchone()
+            self.assertEqual((row["base_rate"], row["public_rate"], row["use_standard_burden"]),
+                             (6.10, 6.30, 1))
+            conn.close()
+
+    def test_public_scale_uses_public_wages(self):
+        with tempfile.TemporaryDirectory() as d:
+            conn = db.connect(os.path.join(d, "t.db"))
+            db.init_db(conn)
+            eid = conn.execute("SELECT id FROM estimates").fetchone()[0]
+            priv = calc.load_estimate(conn, eid)["summary"]["labor"]
+            conn.execute("UPDATE estimates SET wage_scale = 'public' WHERE id = ?", (eid,))
+            pub = calc.load_estimate(conn, eid)["summary"]["labor"]
+            self.assertGreater(pub, priv)
+            conn.close()
+
+
 if __name__ == "__main__":
     unittest.main()

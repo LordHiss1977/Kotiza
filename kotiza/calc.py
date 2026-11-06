@@ -192,13 +192,33 @@ def compute_estimate(estimate, tasks, crews, indirects):
 # Database loaders
 # --------------------------------------------------------------------------
 
-def load_crew(conn, crew_id):
+def standard_burden(conn):
+    from . import db
+    return db.standard_burden_pct(conn)
+
+
+def effective_labor(row, scale, std_burden):
+    """Resolve the wage (private/public scale) and burden % actually used."""
+    r = dict(row)
+    r["wage_private"] = r["base_rate"]
+    if scale == "public" and _f(r.get("public_rate")) > 0:
+        r["base_rate"] = r["public_rate"]
+    if r.get("use_standard_burden"):
+        r["burden_pct"] = std_burden
+    return r
+
+
+def load_crew(conn, crew_id, scale="private", std_burden=None):
     row = conn.execute("SELECT * FROM crews WHERE id = ?", (crew_id,)).fetchone()
     if not row:
         return None
+    if std_burden is None:
+        std_burden = standard_burden(conn)
     crew = dict(row)
-    crew["labor"] = [dict(r) for r in conn.execute(
-        "SELECT cl.id, cl.labor_id, cl.qty, l.code, l.trade, l.base_rate, l.burden_pct"
+    crew["wage_scale"] = scale
+    crew["labor"] = [effective_labor(r, scale, std_burden) for r in conn.execute(
+        "SELECT cl.id, cl.labor_id, cl.qty, l.code, l.trade, l.category, l.base_rate,"
+        " l.public_rate, l.use_standard_burden, l.burden_pct"
         " FROM crew_labor cl JOIN labor l ON l.id = cl.labor_id"
         " WHERE cl.crew_id = ? ORDER BY cl.id", (crew_id,))]
     crew["equipment"] = [dict(r) for r in conn.execute(
@@ -208,9 +228,10 @@ def load_crew(conn, crew_id):
     return compute_crew(crew)
 
 
-def load_all_crews(conn):
+def load_all_crews(conn, scale="private"):
+    std = standard_burden(conn)
     ids = [r[0] for r in conn.execute("SELECT id FROM crews ORDER BY code")]
-    return [load_crew(conn, i) for i in ids]
+    return [load_crew(conn, i, scale, std) for i in ids]
 
 
 def _task_resources(conn, table, task_id):
@@ -246,10 +267,12 @@ def load_estimate(conn, estimate_id):
     for t in tasks:
         t["resources"] = _task_resources(conn, "estimate_task_resources", t["id"])
     crews = {}
+    scale = est.get("wage_scale") or "private"
+    std = standard_burden(conn)
     for t in tasks:
         cid = t["crew_id"]
         if cid and cid not in crews:
-            crews[cid] = load_crew(conn, cid)
+            crews[cid] = load_crew(conn, cid, scale, std)
     for t in tasks:
         c = crews.get(t["crew_id"])
         t["crew_code"] = c["code"] if c else ""

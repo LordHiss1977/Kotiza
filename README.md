@@ -49,6 +49,21 @@ contract price    = price before tax × (1 + tax)
 
 **Bid unit prices:** the price before tax is spread across the tasks in proportion to each task's direct cost. K = price before tax ÷ direct cost, and each bid unit price = unit cost × K. The bill of quantities therefore adds up exactly to the subtotal before tax.
 
+## Panama labor rates (CAPAC–SUNTRACS)
+
+The **Labor** page has three parts:
+
+1. **Standard labor burden (cargas sociales y prestaciones).** Every item can be edited or switched off:
+   - **Paid leave** items are % of wage: vacaciones 9.09%, feriados ≈4%, optional sick leave.
+   - **Charges** are % of wage + paid leave: CSS 13.25% (Ley 462 de 2025; 14.25% from March 2027), seguro educativo 1.5%, riesgos profesionales (your CSS class), XIII mes 8.33%, CSS on XIII 0.90%, prima de antigüedad 1.92%, convention benefits.
+   - Standard burden = L + (1 + L) × C, which is about 48.8% with the defaults.
+2. **Convention reference.** The 2022–2025 category minimums at the July 2025 step, for private and public works.
+3. **Trades.** Each trade has a private-works wage and a public-works wage, and uses either the standard burden or its own custom %. **Load CAPAC–SUNTRACS rates** fills in the convention trades, matched by code, without touching other trades.
+
+Each estimate chooses **private** or **public** works in its project details, and its crews are costed with the matching wages.
+
+The convention figures live in `kotiza/rates_pa.py`. When the 2026–2029 convention is signed, update the wages there (or on the Labor page) and press the button again. **Verify all figures against the official signed table and your CSS statement before bidding.**
+
 ## Workflow
 
 1. **Database:** set up labor, equipment, materials/consumables, and crews. Optionally, build standard tasks in the **Task library** and standard items in the **Indirects** library.

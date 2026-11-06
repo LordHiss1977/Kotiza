@@ -12,7 +12,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from . import calc, db
+from . import calc, db, rates_pa
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -104,8 +104,14 @@ METHODS = ("lump", "pct_direct", "pct_labor")
 
 SIMPLE = {
     "units": ("units", {"code": "str", "name": "str"}, ("code",), "code"),
-    "labor": ("labor", {"code": "str", "trade": "str", "base_rate": "num", "burden_pct": "num"},
+    "labor": ("labor", {"code": "str", "trade": "str", "category": "str", "base_rate": "num",
+                        "public_rate": "num", "use_standard_burden": "num", "burden_pct": "num"},
               ("code", "trade"), "code"),
+    "burden-components": ("burden_components", {"sort": "num", "name": "str",
+                                                "kind": ("enum", ("leave", "charge")),
+                                                "percent": "num", "active": "num",
+                                                "notes": "str"},
+                          ("name",), "sort, id"),
     "equipment": ("equipment", {"code": "str", "description": "str", "hourly_rate": "num"},
                   ("code", "description"), "code"),
     "materials": ("materials", {"code": "str", "description": "str",
@@ -123,7 +129,8 @@ CREW_SPEC = {"code": "str", "name": "str", "description": "str"}
 LIB_SPEC = {"code": "str", "description": "str", "category": "str", "unit": "str",
             "crew_id": "ref", "production_rate": "num", "notes": "str"}
 EST_SPEC = {"name": "str", "client": "str", "location": "str", "estimate_date": "str",
-            "currency": "str", "status": "str", "hours_per_day": "num",
+            "currency": "str", "wage_scale": ("enum", ("private", "public")),
+            "status": "str", "hours_per_day": "num",
             "contingency_pct": "num", "overhead_pct": "num", "profit_pct": "num",
             "bond_pct": "num", "tax_pct": "num", "notes": "str"}
 TASK_SPEC = {"code": "str", "description": "str", "unit": "str", "quantity": "num",
@@ -136,9 +143,21 @@ def list_simple(conn, res):
     table, _, _, order = SIMPLE[res]
     rows = [dict(r) for r in conn.execute(f"SELECT * FROM {table} ORDER BY {order}")]
     if res == "labor":
+        std = db.standard_burden_pct(conn)
         for r in rows:
-            r["loaded_rate"] = r["base_rate"] * (1 + r["burden_pct"] / 100)
+            b = std if r["use_standard_burden"] else r["burden_pct"]
+            pub = r["public_rate"] or r["base_rate"]
+            r["effective_burden"] = b
+            r["loaded_rate"] = r["base_rate"] * (1 + b / 100)
+            r["loaded_public"] = pub * (1 + b / 100)
     return rows
+
+
+def burden_summary(conn):
+    comps = [dict(r) for r in conn.execute("SELECT * FROM burden_components ORDER BY sort, id")]
+    leave, charge, total = rates_pa.total_burden(comps)
+    return {"components": comps, "leave_pct": leave, "charge_pct": charge, "total_pct": total,
+            "convention": rates_pa.CONVENTION, "category_rates": rates_pa.CATEGORY_RATES}
 
 
 # --------------------------------------------------------------------------
@@ -408,6 +427,24 @@ def _update_simple(conn, body, res, rid):
 def _delete_simple(conn, body, res, rid):
     delete(conn, SIMPLE[res][0], int(rid))
     return {"ok": True}
+
+
+@route("GET", "/api/burden")
+def _burden(conn, body):
+    return burden_summary(conn)
+
+
+@route("POST", "/api/burden/reset")
+def _burden_reset(conn, body):
+    conn.execute("DELETE FROM burden_components")
+    db.seed_burden(conn)
+    return burden_summary(conn)
+
+
+@route("POST", "/api/labor/load-capac")
+def _load_capac(conn, body):
+    ins, upd = db.load_capac_rates(conn)
+    return {"inserted": ins, "updated": upd}
 
 
 @route("GET", "/api/crews")
