@@ -130,13 +130,20 @@ def total_burden(components):
 
 # Convention costs that belong in other parts of an estimate (shown as guidance).
 OTHER_CONVENTION_COSTS = [
-    "Herramientas (Cl. 70-71): the company supplies tools, or rents the worker's own at the monthly rates in Cl. 70. Covered by the 'Small tools & PPE' indirect.",
-    "Aporte educacional SUNTRACS (Cl. 119): B/.80-310 per month per company depending on headcount. Added to the indirect library.",
-    "Agua fría o hielo (Cl. 42), equipo de seguridad (Cl. 99): site indirects.",
-    "Condiciones especiales (Cl. 48-53): work at height +16% (up to 125 m) / +20% (above), excavation, tunnels, jackhammer. Apply to the affected tasks.",
-    "Lluvia (Cl. 39): +50% while working in rain over 30 minutes. Paid stoppages per Art. 280 of the Código de Trabajo.",
-    "Trabajadores permanentes (Cl. 129): at least 6% above the convention minimum.",
-    "Proyectos especiales (Cl. 127): Metro lines, 4th bridge over the Canal, Costanera Sur, Changuinola II, Panamá-David train = private wage + 11%.",
+    {"en": "Herramientas (Cl. 70-71): the company supplies tools, or rents the worker's own at the monthly rates in Cl. 70. Covered by the 'Small tools & PPE' indirect.",
+     "es": "Herramientas (Cl. 70-71): la empresa suministra las herramientas o alquila las del trabajador a las tarifas mensuales de la Cl. 70. Cubierto por el indirecto de herramientas menores y EPP."},
+    {"en": "Aporte educacional SUNTRACS (Cl. 119): B/.80-310 per month per company depending on headcount. Added to the indirect library.",
+     "es": "Aporte educacional SUNTRACS (Cl. 119): B/.80-310 al mes por empresa según el número de trabajadores. Incluido en la biblioteca de indirectos."},
+    {"en": "Agua fría o hielo (Cl. 42), equipo de seguridad (Cl. 99): site indirects.",
+     "es": "Agua fría o hielo (Cl. 42), equipo de seguridad (Cl. 99): indirectos de obra."},
+    {"en": "Condiciones especiales (Cl. 48-53): work at height +16% (up to 125 m) / +20% (above), excavation, tunnels, jackhammer. Apply to the affected tasks.",
+     "es": "Condiciones especiales (Cl. 48-53): trabajos en altura +16% (hasta 125 m) / +20% (más de 125 m), excavación, túneles, martillo neumático. Aplicar a las tareas afectadas."},
+    {"en": "Lluvia (Cl. 39): +50% while working in rain over 30 minutes. Paid stoppages per Art. 280 of the Código de Trabajo.",
+     "es": "Lluvia (Cl. 39): +50% mientras se trabaja bajo lluvia por más de 30 minutos. Paralizaciones pagadas según el Art. 280 del Código de Trabajo."},
+    {"en": "Trabajadores permanentes (Cl. 129): at least 6% above the convention minimum.",
+     "es": "Trabajadores permanentes (Cl. 129): al menos 6% por encima del mínimo de la convención."},
+    {"en": "Proyectos especiales (Cl. 127): Metro lines, 4th bridge over the Canal, Costanera Sur, Changuinola II, Panamá-David train = private wage + 11%.",
+     "es": "Proyectos especiales (Cl. 127): líneas del Metro, Cuarto Puente sobre el Canal, Costanera Sur, Changuinola II, tren Panamá-David = salario de obra privada + 11%."},
 ]
 
 INDIRECT_ITEMS = [

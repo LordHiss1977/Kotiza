@@ -1,6 +1,33 @@
 /* Kotiza - single-page UI (vanilla JS, no build step). */
 'use strict';
 
+// ---------------------------------------------------------------- language (es / en)
+// The choice is saved in the browser; switching reloads the page so every label changes at once.
+const LANG = (() => {
+  try { const l = localStorage.getItem('kotiza-lang'); if (l === 'es' || l === 'en') return l; } catch (_) { /* ignore */ }
+  return 'es';
+})();
+const I18N = (window.KZ_I18N && window.KZ_I18N[LANG]) || {};
+/** Translate an English UI phrase; {name} placeholders are filled from vars. */
+function tr(key, vars) {
+  // "Text|context" keys let one English word have different translations (e.g. a short column label).
+  let s = LANG === 'en' ? key.split('|')[0] : (I18N[key] ?? I18N[key.split('|')[0]] ?? key.split('|')[0]);
+  if (vars) s = s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+  return s;
+}
+/** Server error messages are English; translate the known ones. */
+function trError(msg) {
+  if (LANG === 'en' || !msg) return msg;
+  if (I18N[msg]) return I18N[msg];
+  let m = /^'(.+)' is required$/.exec(msg);
+  if (m) return tr("'{field}' is required", { field: m[1] });
+  m = /^'(.+)' must be a number$/.exec(msg);
+  if (m) return tr("'{field}' must be a number", { field: m[1] });
+  return msg;
+}
+const statusLabel = (s) => tr(s);
+document.documentElement.lang = LANG;
+
 const $app = document.getElementById('app');
 const $modal = document.getElementById('modal');
 
@@ -15,7 +42,7 @@ async function api(method, path, body) {
   const res = await fetch('/api' + path, opts);
   let data = null;
   try { data = await res.json(); } catch (_) { /* empty */ }
-  if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+  if (!res.ok) throw new Error(trError(data && data.error) || tr('Request failed ({status})', { status: res.status }));
   return data;
 }
 
@@ -109,7 +136,7 @@ function field(label, input, cls) {
 }
 
 const STATUSES = ['draft', 'submitted', 'won', 'lost'];
-const METHOD_LABELS = { lump: 'Quantity × rate', pct_direct: '% of direct cost', pct_labor: '% of direct labor' };
+const METHOD_LABELS = { lump: tr('Quantity × rate'), pct_direct: tr('% of direct cost'), pct_labor: tr('% of direct labor') };
 
 // ---------------------------------------------------------------- reference data
 
@@ -133,7 +160,7 @@ function unitDatalist() {
 function openModal(title, body, footer) {
   $modal.replaceChildren(
     h('div', { class: 'modal-head' }, h('h2', { style: 'margin:0' }, title),
-      h('button', { class: 'icon', onclick: () => $modal.close(), title: 'Close' }, '✕')),
+      h('button', { class: 'icon', onclick: () => $modal.close(), title: tr('Close') }, '✕')),
     h('div', { class: 'modal-body' }, body),
     h('div', { class: 'modal-foot' }, footer));
   if (!$modal.open) $modal.showModal();
@@ -163,7 +190,7 @@ async function router() {
       try {
         await fn(...m.slice(1));
       } catch (err) {
-        $app.replaceChildren(h('div', { class: 'panel empty' }, 'Error: ' + err.message));
+        $app.replaceChildren(h('div', { class: 'panel empty' }, tr('Error: ') + err.message));
       }
       return;
     }
@@ -177,7 +204,7 @@ window.addEventListener('hashchange', router);
 async function renderEstimates() {
   const list = await api('GET', '/estimates');
   const newEstimate = async () => {
-    const name = prompt('Estimate / project name:');
+    const name = prompt(tr('Estimate / project name:'));
     if (!name) return;
     const today = new Date().toISOString().slice(0, 10);
     const r = await attempt(() => api('POST', '/estimates', {
@@ -188,40 +215,40 @@ async function renderEstimates() {
   };
   $app.replaceChildren(
     h('div', { class: 'page-head' },
-      h('div', {}, h('h1', {}, 'Estimates'),
-        h('div', { class: 'sub' }, 'Each estimate is built task by task from the cost database.')),
-      h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: newEstimate }, '+ New estimate'))),
+      h('div', {}, h('h1', {}, tr('Estimates')),
+        h('div', { class: 'sub' }, tr('Each estimate is built task by task from the cost database.'))),
+      h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: newEstimate }, tr('+ New estimate')))),
     h('div', { class: 'panel' }, list.length === 0
-      ? h('div', { class: 'empty' }, 'No estimates yet. Click “New estimate” to start.')
+      ? h('div', { class: 'empty' }, tr('No estimates yet. Click “New estimate” to start.'))
       : h('div', { class: 'table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {},
-          h('th', {}, 'Name'), h('th', {}, 'Client'), h('th', {}, 'Date'), h('th', {}, 'Status'),
-          h('th', { class: 'n' }, 'Tasks'), h('th', { class: 'n' }, 'Direct cost'),
-          h('th', { class: 'n' }, 'Contract price'), h('th', {}))),
+          h('th', {}, tr('Name')), h('th', {}, tr('Client')), h('th', {}, tr('Date')), h('th', {}, tr('Status')),
+          h('th', { class: 'n' }, tr('Tasks')), h('th', { class: 'n' }, tr('Direct cost')),
+          h('th', { class: 'n' }, tr('Contract price')), h('th', {}))),
         h('tbody', {}, list.map((e) => {
           const m = moneyFmt(e.currency);
           return h('tr', {},
             h('td', {}, h('a', { href: `#/estimate/${e.id}` }, h('b', {}, e.name))),
             h('td', {}, e.client), h('td', {}, e.estimate_date),
-            h('td', {}, h('span', { class: 'tag ' + e.status }, e.status)),
+            h('td', {}, h('span', { class: 'tag ' + e.status }, statusLabel(e.status))),
             h('td', { class: 'n' }, e.task_count),
             h('td', { class: 'n' }, m(e.direct)),
             h('td', { class: 'n' }, h('b', {}, m(e.contract_price))),
             h('td', { class: 'actions-cell' },
-              h('a', { class: 'btn', href: `#/estimate/${e.id}` }, 'Open'), ' ',
+              h('a', { class: 'btn', href: `#/estimate/${e.id}` }, tr('Open')), ' ',
               h('button', {
                 onclick: async () => {
-                  const r = await attempt(() => api('POST', `/estimates/${e.id}/duplicate`), 'Duplicated');
+                  const r = await attempt(() => api('POST', `/estimates/${e.id}/duplicate`), tr('Duplicated'));
                   location.hash = `#/estimate/${r.id}`;
                 },
-              }, 'Duplicate'), ' ',
+              }, tr('Duplicate')), ' ',
               h('button', {
                 class: 'danger', onclick: async () => {
-                  if (!confirmBox(`Delete estimate “${e.name}”? This cannot be undone.`)) return;
-                  await attempt(() => api('DELETE', `/estimates/${e.id}`), 'Deleted');
+                  if (!confirmBox(tr('Delete estimate “{name}”? This cannot be undone.', { name: e.name }))) return;
+                  await attempt(() => api('DELETE', `/estimates/${e.id}`), tr('Deleted'));
                   renderEstimates();
                 },
-              }, 'Delete')));
+              }, tr('Delete'))));
         }))))));
 }
 
@@ -246,7 +273,7 @@ async function refreshEstimate() {
 }
 
 async function saveEstimateField(f, value) {
-  await attempt(() => api('PUT', `/estimates/${current.estimate.id}`, { [f]: value }), 'Saved');
+  await attempt(() => api('PUT', `/estimates/${current.estimate.id}`, { [f]: value }), tr('Saved'));
   await refreshEstimate();
 }
 
@@ -263,42 +290,42 @@ function drawEstimate() {
   $app.replaceChildren(
     h('div', { class: 'page-head' },
       h('div', {},
-        h('div', { class: 'sub' }, h('a', { href: '#/estimates' }, '← Estimates')),
-        h('h1', {}, e.name, ' ', h('span', { class: 'tag ' + e.status }, e.status))),
+        h('div', { class: 'sub' }, h('a', { href: '#/estimates' }, tr('← Estimates'))),
+        h('h1', {}, e.name, ' ', h('span', { class: 'tag ' + e.status }, statusLabel(e.status)))),
       h('div', { class: 'actions' },
-        h('a', { class: 'btn', href: `#/estimate/${e.id}/report` }, 'Report / print'),
-        h('a', { class: 'btn', href: `/api/estimates/${e.id}/export.csv` }, 'Export CSV'),
+        h('a', { class: 'btn', href: `#/estimate/${e.id}/report` }, tr('Report / print')),
+        h('a', { class: 'btn', href: `/api/estimates/${e.id}/export.csv?lang=${LANG}` }, tr('Export CSV')),
         h('button', {
           onclick: async () => {
-            const r = await attempt(() => api('POST', `/estimates/${e.id}/duplicate`), 'Duplicated');
+            const r = await attempt(() => api('POST', `/estimates/${e.id}/duplicate`), tr('Duplicated'));
             location.hash = `#/estimate/${r.id}`;
           },
-        }, 'Duplicate'),
+        }, tr('Duplicate')),
         h('button', {
           class: 'danger', onclick: async () => {
-            if (!confirmBox(`Delete estimate “${e.name}”?`)) return;
-            await attempt(() => api('DELETE', `/estimates/${e.id}`), 'Deleted');
+            if (!confirmBox(tr('Delete estimate “{name}”?', { name: e.name }))) return;
+            await attempt(() => api('DELETE', `/estimates/${e.id}`), tr('Deleted'));
             location.hash = '#/estimates';
           },
-        }, 'Delete'))),
+        }, tr('Delete')))),
     h('div', { class: 'est-layout' },
       h('div', {},
         h('div', { class: 'panel' },
-          h('div', { class: 'panel-head' }, h('h2', {}, 'Project')),
+          h('div', { class: 'panel-head' }, h('h2', {}, tr('Project'))),
           h('div', { class: 'grid' },
-            est('name', 'Estimate name', 'text', 'wide'),
-            est('client', 'Client'),
-            est('location', 'Location'),
-            est('estimate_date', 'Date', 'date'),
-            est('currency', 'Currency (ISO code)'),
-            field('Status', h('select', {
+            est('name', tr('Estimate name'), 'text', 'wide'),
+            est('client', tr('Client')),
+            est('location', tr('Location')),
+            est('estimate_date', tr('Date'), 'date'),
+            est('currency', tr('Currency (ISO code)')),
+            field(tr('Status'), h('select', {
               dataset: { fk: 'est-status' }, onchange: (ev) => saveEstimateField('status', ev.target.value),
-            }, options(STATUSES.map((s) => ({ value: s, label: s })), e.status))),
-            field('Wage scale (CAPAC–SUNTRACS)', h('select', {
+            }, options(STATUSES.map((s) => ({ value: s, label: statusLabel(s) })), e.status))),
+            field(tr('Wage scale (CAPAC–SUNTRACS)'), h('select', {
               dataset: { fk: 'est-wage_scale' }, onchange: (ev) => saveEstimateField('wage_scale', ev.target.value),
-            }, options([{ value: 'private', label: 'Private works (Cl. 125)' }, { value: 'public', label: 'Public works (Cl. 126)' }, { value: 'special', label: 'Special project +11% (Cl. 127)' }], e.wage_scale))),
-            est('hours_per_day', 'Working hours / day', 'num'),
-            est('notes', 'Notes / scope assumptions', 'textarea', 'wide'))),
+            }, options([{ value: 'private', label: tr('Private works (Cl. 125)') }, { value: 'public', label: tr('Public works (Cl. 126)') }, { value: 'special', label: tr('Special project +11% (Cl. 127)') }], e.wage_scale))),
+            est('hours_per_day', tr('Working hours / day'), 'num'),
+            est('notes', tr('Notes / scope assumptions'), 'textarea', 'wide'))),
         drawTasksPanel(),
         drawIndirectsPanel()),
       drawSummaryPanel()));
@@ -310,14 +337,14 @@ function drawTasksPanel() {
   const { tasks, summary: s } = current;
   const lib = refs.library || [];
   const libSel = h('select', { dataset: { fk: 'lib-sel' } },
-    options(lib.map((t) => ({ value: t.id, group: t.category || 'Uncategorized', label: `${t.code} — ${t.description} (${t.unit})` })), '', { blank: '— choose a standard task —' }));
-  const libQty = numInput('', { placeholder: 'Quantity', dataset: { fk: 'lib-qty' } });
+    options(lib.map((t) => ({ value: t.id, group: t.category || tr('Uncategorized'), label: `${t.code} — ${t.description} (${t.unit})` })), '', { blank: tr('— choose a standard task —') }));
+  const libQty = numInput('', { placeholder: tr('Quantity'), dataset: { fk: 'lib-qty' } });
   libQty.value = '';
 
   const addFromLib = async () => {
-    if (!libSel.value) return toast('Choose a task from the library first', true);
+    if (!libSel.value) return toast(tr('Choose a task from the library first'), true);
     await attempt(() => api('POST', `/estimates/${current.estimate.id}/tasks`,
-      { library_id: libSel.value, quantity: num(libQty.value) }), 'Task added');
+      { library_id: libSel.value, quantity: num(libQty.value) }), tr('Task added'));
     await refreshEstimate();
   };
 
@@ -331,7 +358,7 @@ function drawTasksPanel() {
       h('td', { style: 'width:76px' }, numInput(t.quantity, {
         dataset: { fk: `tq-${t.id}` },
         onchange: async (ev) => {
-          await attempt(() => api('PUT', `/tasks/${t.id}`, { quantity: ev.target.value }), 'Saved');
+          await attempt(() => api('PUT', `/tasks/${t.id}`, { quantity: ev.target.value }), tr('Saved'));
           await refreshEstimate();
         },
       })),
@@ -346,13 +373,13 @@ function drawTasksPanel() {
       h('td', { class: 'n' }, fmtN(c.unit_cost)),
       h('td', { class: 'n' }, h('b', {}, fmtN(c.bid_unit_price))),
       h('td', { class: 'actions-cell' },
-        h('button', { class: 'icon', title: 'Edit task (crew, rate, materials, consumables)', onclick: () => editEstimateTask(t) }, '✎'),
-        h('button', { class: 'icon', title: 'Move up', disabled: i === 0, onclick: () => moveRow('tasks', t.id, -1) }, '↑'),
-        h('button', { class: 'icon', title: 'Move down', disabled: i === tasks.length - 1, onclick: () => moveRow('tasks', t.id, 1) }, '↓'),
+        h('button', { class: 'icon', title: tr('Edit task (crew, rate, materials, consumables)'), onclick: () => editEstimateTask(t) }, '✎'),
+        h('button', { class: 'icon', title: tr('Move up'), disabled: i === 0, onclick: () => moveRow('tasks', t.id, -1) }, '↑'),
+        h('button', { class: 'icon', title: tr('Move down'), disabled: i === tasks.length - 1, onclick: () => moveRow('tasks', t.id, 1) }, '↓'),
         h('button', {
-          class: 'icon danger', title: 'Delete task', onclick: async () => {
-            if (!confirmBox(`Delete task “${t.description}”?`)) return;
-            await attempt(() => api('DELETE', `/tasks/${t.id}`), 'Deleted');
+          class: 'icon danger', title: tr('Delete task'), onclick: async () => {
+            if (!confirmBox(tr('Delete task “{name}”?', { name: t.description }))) return;
+            await attempt(() => api('DELETE', `/tasks/${t.id}`), tr('Deleted'));
             await refreshEstimate();
           },
         }, '✕')));
@@ -360,27 +387,27 @@ function drawTasksPanel() {
 
   return h('div', { class: 'panel' },
     h('div', { class: 'panel-head' },
-      h('h2', {}, `Tasks — direct cost (${current.estimate.currency})`),
-      h('span', { class: 'hint' }, 'Quantity × (crew at production rate + materials + consumables). Bid unit price includes indirects & markups, excludes tax.')),
+      h('h2', {}, tr('Tasks — direct cost ({currency})', { currency: current.estimate.currency })),
+      h('span', { class: 'hint' }, tr('Quantity × (crew at production rate + materials + consumables). Bid unit price includes indirects & markups, excludes tax.'))),
     h('div', { class: 'table-wrap' }, h('table', { class: 'dense' },
       h('thead', {}, h('tr', {},
-        h('th', {}, 'Code'), h('th', {}, 'Description'), h('th', {}, 'Unit'),
-        h('th', { class: 'n' }, 'Quantity'), h('th', {}, 'Crew'), h('th', { class: 'n' }, 'Rate/day'),
-        h('th', { class: 'n' }, 'Crew-days'), h('th', { class: 'n' }, 'Labor'), h('th', { class: 'n' }, 'Equip.'),
-        h('th', { class: 'n' }, 'Materials'), h('th', { class: 'n' }, 'Consum.'), h('th', { class: 'n' }, 'Direct'),
-        h('th', { class: 'n' }, 'Unit cost'), h('th', { class: 'n' }, 'Bid price/unit'), h('th', {}))),
-      h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 15, class: 'empty' }, 'No tasks yet. Add one below.'))),
+        h('th', {}, tr('Code')), h('th', {}, tr('Description')), h('th', {}, tr('Unit|short')),
+        h('th', { class: 'n' }, tr('Quantity')), h('th', {}, tr('Crew|short')), h('th', { class: 'n' }, tr('Rate/day')),
+        h('th', { class: 'n' }, tr('Crew-days')), h('th', { class: 'n' }, tr('Labor')), h('th', { class: 'n' }, tr('Equip.')),
+        h('th', { class: 'n' }, tr('Materials')), h('th', { class: 'n' }, tr('Consum.')), h('th', { class: 'n' }, tr('Direct')),
+        h('th', { class: 'n' }, tr('Unit cost')), h('th', { class: 'n' }, tr('Bid price/unit')), h('th', {}))),
+      h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 15, class: 'empty' }, tr('No tasks yet. Add one below.')))),
       tasks.length ? h('tfoot', {}, h('tr', { class: 'total' },
-        h('td', { colspan: 6 }, 'Total direct cost'),
+        h('td', { colspan: 6 }, tr('Total direct cost')),
         h('td', { class: 'n' }, fmtN(s.duration_crew_days, 1)),
         h('td', { class: 'n' }, fmtN(s.labor)), h('td', { class: 'n' }, fmtN(s.equipment)),
         h('td', { class: 'n' }, fmtN(s.material)), h('td', { class: 'n' }, fmtN(s.consumable)),
         h('td', { class: 'n' }, fmtN(s.direct)), h('td', { colspan: 3 }))) : null)),
     h('div', { class: 'add-bar' },
       libSel, libQty,
-      h('button', { class: 'primary', onclick: addFromLib }, 'Add from library'),
-      h('span', { class: 'muted' }, 'or'),
-      h('button', { onclick: () => editEstimateTask(null) }, '+ Build a new task')));
+      h('button', { class: 'primary', onclick: addFromLib }, tr('Add from library')),
+      h('span', { class: 'muted' }, tr('or')),
+      h('button', { onclick: () => editEstimateTask(null) }, tr('+ Build a new task'))));
 }
 
 async function moveRow(kind, id, dir) {
@@ -393,7 +420,7 @@ function editEstimateTask(task) {
     mode: 'estimate',
     task: task || { code: '', description: '', unit: 'm2', quantity: 0, crew_id: null, production_rate: 0, notes: '', resources: [] },
     hpd: current.estimate.hours_per_day,
-    title: task ? `Edit task ${task.code || ''}` : 'New task',
+    title: task ? tr('Edit task {code}', { code: task.code || '' }) : tr('New task'),
     onSave: async (data) => {
       if (task) await api('PUT', `/tasks/${task.id}`, data);
       else await api('POST', `/estimates/${current.estimate.id}/tasks`, data);
@@ -408,7 +435,7 @@ function editEstimateTask(task) {
       const r = await api('POST', `/tasks/${task.id}/to-library`);
       await loadRefs('library');
       await refreshEstimate();
-      return `Saved to task library as ${r.code}`;
+      return tr('Saved to task library as {code}', { code: r.code });
     } : null,
   });
 }
@@ -455,12 +482,12 @@ function openTaskEditor({ mode, task, hpd, title, onSave, onDelete, onToLibrary 
       const perUnit = m ? num(r.qty_per_unit) * (1 + num(m.waste_pct) / 100) * num(m.unit_cost) : 0;
       rows.push(h('tr', {},
         h('td', {}, h('input', {
-          list: `mat-list-${kind}`, placeholder: 'Type a code or part of the name…',
+          list: `mat-list-${kind}`, placeholder: tr('Type a code or part of the name…'),
           value: m ? matLabel(m) : '', dataset: { fk: `res-${idx}-m` },
           onchange: (ev) => {
             const v = ev.target.value.trim();
             const hit = mats.find((x) => matLabel(x) === v) || mats.find((x) => x.code.toLowerCase() === v.toLowerCase());
-            if (hit) { r.material_id = hit.id; draw(); } else if (v) toast('No matching item — pick one from the list', true);
+            if (hit) { r.material_id = hit.id; draw(); } else if (v) toast(tr('No matching item — pick one from the list'), true);
           },
         })),
         h('td', { style: 'width:120px' }, numInput(r.qty_per_unit, {
@@ -480,17 +507,17 @@ function openTaskEditor({ mode, task, hpd, title, onSave, onDelete, onToLibrary 
 
   function resourceTable(kind, label) {
     return [
-      h('h3', {}, label, h('span', { class: 'hint' }, `  — quantity per 1 ${st.unit || 'unit'} of task`)),
+      h('h3', {}, label, h('span', { class: 'hint' }, tr('  — quantity per 1 {unit} of task', { unit: st.unit || tr('unit') }))),
       h('table', {},
         h('thead', {}, h('tr', {},
-          h('th', {}, kind === 'material' ? 'Material' : 'Consumable'), h('th', { class: 'n' }, `Qty / ${st.unit || 'unit'}`),
-          h('th', {}, 'Unit'), h('th', { class: 'n' }, 'Unit cost'), h('th', { class: 'n' }, 'Waste'),
-          h('th', { class: 'n' }, `Cost / ${st.unit || 'unit'}`), h('th', {}))),
+          h('th', {}, kind === 'material' ? tr('Material') : tr('Consumable')), h('th', { class: 'n' }, tr('Qty / {unit}', { unit: st.unit || tr('unit') })),
+          h('th', {}, tr('Unit')), h('th', { class: 'n' }, tr('Unit cost')), h('th', { class: 'n' }, tr('Waste')),
+          h('th', { class: 'n' }, tr('Cost / {unit}', { unit: st.unit || tr('unit') })), h('th', {}))),
         h('tbody', {}, resourceRows(kind))),
       h('button', {
         class: 'icon', style: 'margin-top:6px',
         onclick: () => { st.resources.push({ material_id: '', qty_per_unit: 0, _kind: kind }); draw(); },
-      }, `+ Add ${kind}`),
+      }, kind === 'material' ? tr('+ Add material') : tr('+ Add consumable')),
     ];
   }
 
@@ -508,32 +535,32 @@ function openTaskEditor({ mode, task, hpd, title, onSave, onDelete, onToLibrary 
       ['material', 'consumable'].map((k) => h('datalist', { id: `mat-list-${k}` },
         (refs.materials || []).filter((x) => x.kind === k).map((x) => h('option', { value: matLabel(x) })))),
       h('div', { class: 'grid' },
-        field('Code', h('input', { value: st.code, dataset: { fk: 't-code' }, oninput: set('code') })),
-        field('Description', h('input', { value: st.description, dataset: { fk: 't-desc' }, oninput: set('description') }), 'wide'),
-        !isEst ? field('Category', h('input', { value: st.category, dataset: { fk: 't-cat' }, oninput: set('category') })) : null,
-        field('Unit of measure', h('input', { value: st.unit, list: 'units-list', dataset: { fk: 't-unit' }, onchange: setDraw('unit') })),
-        isEst ? field('Quantity', numInput(st.quantity, { dataset: { fk: 't-qty' }, onchange: setDraw('quantity') })) : null),
-      h('h3', {}, 'Crew & productivity'),
+        field(tr('Code'), h('input', { value: st.code, dataset: { fk: 't-code' }, oninput: set('code') })),
+        field(tr('Description'), h('input', { value: st.description, dataset: { fk: 't-desc' }, oninput: set('description') }), 'wide'),
+        !isEst ? field(tr('Category'), h('input', { value: st.category, dataset: { fk: 't-cat' }, oninput: set('category') })) : null,
+        field(tr('Unit of measure'), h('input', { value: st.unit, list: 'units-list', dataset: { fk: 't-unit' }, onchange: setDraw('unit') })),
+        isEst ? field(tr('Quantity'), numInput(st.quantity, { dataset: { fk: 't-qty' }, onchange: setDraw('quantity') })) : null),
+      h('h3', {}, tr('Crew & productivity')),
       h('div', { class: 'grid' },
-        field('Crew', h('select', { dataset: { fk: 't-crew' }, onchange: setDraw('crew_id') }, options(crewOpts, st.crew_id, { blank: '— no crew (materials only) —' })), 'wide'),
-        field(`Production rate (${st.unit || 'units'} per crew-day)`, numInput(st.production_rate, { dataset: { fk: 't-rate' }, onchange: setDraw('production_rate') })),
-        field('Crew-hours per unit', h('input', { value: fmtN(p.hrsPerUnit, 4), disabled: true }))),
+        field(tr('Crew'), h('select', { dataset: { fk: 't-crew' }, onchange: setDraw('crew_id') }, options(crewOpts, st.crew_id, { blank: tr('— no crew (materials only) —') })), 'wide'),
+        field(tr('Production rate ({unit} per crew-day)', { unit: st.unit || tr('units') }), numInput(st.production_rate, { dataset: { fk: 't-rate' }, onchange: setDraw('production_rate') })),
+        field(tr('Crew-hours per unit'), h('input', { value: fmtN(p.hrsPerUnit, 4), disabled: true }))),
       p.crew ? h('div', { class: 'hint', style: 'margin-top:4px' },
         `${p.crew.name}: `, p.crew.labor.map((m) => `${fmtQ(m.qty)} × ${m.trade}`).join(', '),
         p.crew.equipment.length ? ' + ' + p.crew.equipment.map((m) => `${fmtQ(m.qty)} × ${m.description}`).join(', ') : '',
-        ` — labor ${money(p.crew.labor_hourly)}/hr, equipment ${money(p.crew.equipment_hourly)}/hr (at ${hpd} h/day)`) : null,
-      resourceTable('material', 'Materials'),
-      resourceTable('consumable', 'Consumables'),
-      h('h3', {}, 'Notes'),
+        tr(' — labor {labor}/hr, equipment {equip}/hr (at {hpd} h/day)', { labor: money(p.crew.labor_hourly), equip: money(p.crew.equipment_hourly), hpd })) : null,
+      resourceTable('material', tr('Materials')),
+      resourceTable('consumable', tr('Consumables')),
+      h('h3', {}, tr('Notes')),
       h('textarea', { value: st.notes, dataset: { fk: 't-notes' }, oninput: set('notes') }),
       h('div', { class: 'preview-box' },
-        h('div', {}, h('span', {}, `Labor / ${st.unit}`), h('b', {}, money(p.labor))),
-        h('div', {}, h('span', {}, `Equipment / ${st.unit}`), h('b', {}, money(p.equip))),
-        h('div', {}, h('span', {}, `Materials / ${st.unit}`), h('b', {}, money(p.mat))),
-        h('div', {}, h('span', {}, `Consumables / ${st.unit}`), h('b', {}, money(p.cons))),
-        h('div', {}, h('span', {}, `Direct unit cost`), h('b', {}, money(p.unit))),
-        isEst ? h('div', {}, h('span', {}, 'Crew-days'), h('b', {}, fmtN(num(st.production_rate) > 0 ? q / num(st.production_rate) : 0, 2))) : null,
-        isEst ? h('div', {}, h('span', {}, 'Task direct cost'), h('b', {}, money(p.unit * q))) : null));
+        h('div', {}, h('span', {}, tr('Labor / {unit}', { unit: st.unit })), h('b', {}, money(p.labor))),
+        h('div', {}, h('span', {}, tr('Equipment / {unit}', { unit: st.unit })), h('b', {}, money(p.equip))),
+        h('div', {}, h('span', {}, tr('Materials / {unit}', { unit: st.unit })), h('b', {}, money(p.mat))),
+        h('div', {}, h('span', {}, tr('Consumables / {unit}', { unit: st.unit })), h('b', {}, money(p.cons))),
+        h('div', {}, h('span', {}, tr('Direct unit cost')), h('b', {}, money(p.unit))),
+        isEst ? h('div', {}, h('span', {}, tr('Crew-days')), h('b', {}, fmtN(num(st.production_rate) > 0 ? q / num(st.production_rate) : 0, 2))) : null,
+        isEst ? h('div', {}, h('span', {}, tr('Task direct cost')), h('b', {}, money(p.unit * q))) : null));
 
     const collect = () => {
       const data = {
@@ -547,30 +574,30 @@ function openTaskEditor({ mode, task, hpd, title, onSave, onDelete, onToLibrary 
     const footer = [
       h('div', { class: 'actions' }, onDelete ? h('button', {
         class: 'danger', onclick: async () => {
-          if (!confirmBox('Delete this task?')) return;
-          await attempt(onDelete, 'Deleted');
+          if (!confirmBox(tr('Delete this task?'))) return;
+          await attempt(onDelete, tr('Deleted'));
           $modal.close();
         },
-      }, 'Delete') : null,
+      }, tr('Delete')) : null,
       onToLibrary ? h('button', {
-        title: 'Save this task and copy it into the task library as a reusable standard task',
+        title: tr('Save this task and copy it into the task library as a reusable standard task'),
         onclick: async () => {
-          if (!st.description.trim()) return toast('Description is required', true);
+          if (!st.description.trim()) return toast(tr('Description is required'), true);
           const msg = await attempt(() => onToLibrary(collect()));
           toast(msg);
           $modal.close();
         },
-      }, 'Save + copy to library') : null),
+      }, tr('Save + copy to library')) : null),
       h('div', { class: 'actions' },
-        h('button', { onclick: () => $modal.close() }, 'Cancel'),
+        h('button', { onclick: () => $modal.close() }, tr('Cancel')),
         h('button', {
           class: 'primary', onclick: async () => {
-            if (!st.description.trim()) return toast('Description is required', true);
+            if (!st.description.trim()) return toast(tr('Description is required'), true);
             const data = collect();
-            await attempt(() => onSave(data), 'Saved');
+            await attempt(() => onSave(data), tr('Saved'));
             $modal.close();
           },
-        }, 'Save task')),
+        }, tr('Save task'))),
     ];
     openModal(title, body, footer);
     const nb = $modal.querySelector('.modal-body');
@@ -586,12 +613,12 @@ function drawIndirectsPanel() {
   const { indirects, summary: s } = current;
   const libSel = h('select', {},
     options((refs.indirectLib || []).map((x) => ({
-      value: x.id, group: x.category || 'General',
-      label: x.method === 'lump' ? `${x.description} (${money(x.rate)}/${x.unit})` : `${x.description} (${x.percent}% ${x.method === 'pct_labor' ? 'of labor' : 'of direct'})`,
-    })), '', { blank: '— choose a standard indirect cost —' }));
+      value: x.id, group: x.category || tr('General'),
+      label: x.method === 'lump' ? `${x.description} (${money(x.rate)}/${x.unit})` : `${x.description} (${x.method === 'pct_labor' ? tr('{pct}% of labor', { pct: x.percent }) : tr('{pct}% of direct', { pct: x.percent })})`,
+    })), '', { blank: tr('— choose a standard indirect cost —') }));
 
   const save = (it, f) => async (ev) => {
-    await attempt(() => api('PUT', `/indirects/${it.id}`, { [f]: ev.target.value }), 'Saved');
+    await attempt(() => api('PUT', `/indirects/${it.id}`, { [f]: ev.target.value }), tr('Saved'));
     await refreshEstimate();
   };
 
@@ -612,7 +639,7 @@ function drawIndirectsPanel() {
         h('button', { class: 'icon', disabled: i === indirects.length - 1, onclick: () => moveRow('indirects', it.id, 1) }, '↓'), ' ',
         h('button', {
           class: 'icon danger', onclick: async () => {
-            await attempt(() => api('DELETE', `/indirects/${it.id}`), 'Deleted');
+            await attempt(() => api('DELETE', `/indirects/${it.id}`), tr('Deleted'));
             await refreshEstimate();
           },
         }, '✕')));
@@ -621,33 +648,33 @@ function drawIndirectsPanel() {
   return h('div', { class: 'panel' },
     unitDatalist(),
     h('div', { class: 'panel-head' },
-      h('h2', {}, 'Indirect costs'),
-      h('span', { class: 'hint' }, 'Site overheads (staff, facilities, mobilization) as quantity × rate, or a % of direct cost / direct labor.')),
+      h('h2', {}, tr('Indirect costs')),
+      h('span', { class: 'hint' }, tr('Site overheads (staff, facilities, mobilization) as quantity × rate, or a % of direct cost / direct labor.'))),
     h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {},
-        h('th', {}, 'Description'), h('th', {}, 'Category'), h('th', {}, 'Method'), h('th', {}, 'Unit'),
-        h('th', { class: 'n' }, 'Qty'), h('th', { class: 'n' }, 'Rate'), h('th', { class: 'n' }, '%'),
-        h('th', { class: 'n' }, 'Amount'), h('th', {}))),
-      h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 9, class: 'empty' }, 'No indirect costs.'))),
+        h('th', {}, tr('Description')), h('th', {}, tr('Category')), h('th', {}, tr('Method')), h('th', {}, tr('Unit')),
+        h('th', { class: 'n' }, tr('Qty')), h('th', { class: 'n' }, tr('Rate')), h('th', { class: 'n' }, '%'),
+        h('th', { class: 'n' }, tr('Amount')), h('th', {}))),
+      h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 9, class: 'empty' }, tr('No indirect costs.')))),
       indirects.length ? h('tfoot', {}, h('tr', { class: 'total' },
-        h('td', { colspan: 7 }, 'Total indirect costs'),
+        h('td', { colspan: 7 }, tr('Total indirect costs')),
         h('td', { class: 'n' }, money(s.indirect)), h('td', {}))) : null)),
     h('div', { class: 'add-bar' },
       libSel,
       h('button', {
         class: 'primary', onclick: async () => {
-          if (!libSel.value) return toast('Choose an item first', true);
-          await attempt(() => api('POST', `/estimates/${current.estimate.id}/indirects`, { library_id: libSel.value }), 'Added');
+          if (!libSel.value) return toast(tr('Choose an item first'), true);
+          await attempt(() => api('POST', `/estimates/${current.estimate.id}/indirects`, { library_id: libSel.value }), tr('Added'));
           await refreshEstimate();
         },
-      }, 'Add from library'),
+      }, tr('Add from library')),
       h('button', {
         onclick: async () => {
           await attempt(() => api('POST', `/estimates/${current.estimate.id}/indirects`,
-            { description: 'New indirect cost', method: 'lump', unit: 'ls', quantity: 1, rate: 0 }));
+            { description: tr('New indirect cost'), method: 'lump', unit: 'ls', quantity: 1, rate: 0 }));
           await refreshEstimate();
         },
-      }, '+ Blank line')));
+      }, tr('+ Blank line'))));
 }
 
 // ---------------------------------------------------------------- summary
@@ -662,35 +689,35 @@ function drawSummaryPanel() {
   const share = (v) => (s.contract_price ? fmtN((v / s.contract_price) * 100, 1) + '%' : '—');
 
   return h('div', { class: 'panel summary' },
-    h('h2', {}, 'Contract price build-up'),
-    row('Labor', money(s.labor)),
-    row('Equipment', money(s.equipment)),
-    row('Materials', money(s.material)),
-    row('Consumables', money(s.consumable)),
-    row('Direct cost', money(s.direct), 'strong sep'),
-    row('Indirect costs', money(s.indirect)),
-    row('Total cost', money(s.cost), 'strong sep'),
-    s.markups.map((m) => row(`${m.label} ${fmtN(m.percent, 2)}%`, money(m.amount))),
-    row('Price before tax', money(s.price_before_tax), 'strong sep'),
-    row(`Tax ${fmtN(s.tax_pct, 2)}%`, money(s.tax)),
+    h('h2', {}, tr('Contract price build-up')),
+    row(tr('Labor'), money(s.labor)),
+    row(tr('Equipment'), money(s.equipment)),
+    row(tr('Materials'), money(s.material)),
+    row(tr('Consumables'), money(s.consumable)),
+    row(tr('Direct cost'), money(s.direct), 'strong sep'),
+    row(tr('Indirect costs'), money(s.indirect)),
+    row(tr('Total cost'), money(s.cost), 'strong sep'),
+    s.markups.map((m) => row(`${tr(m.label)} ${fmtN(m.percent, 2)}%`, money(m.amount))),
+    row(tr('Price before tax'), money(s.price_before_tax), 'strong sep'),
+    row(tr('Tax {pct}%', { pct: fmtN(s.tax_pct, 2) }), money(s.tax)),
     h('div', { class: 'price' },
-      h('div', { class: 'muted' }, 'Contract price'),
+      h('div', { class: 'muted' }, tr('Contract price')),
       h('div', { class: 'big' }, money(s.contract_price))),
-    h('h3', {}, 'Markups (%)'),
+    h('h3', {}, tr('Markups (%)')),
     h('div', { class: 'markup-inputs' },
-      pct('contingency_pct', 'Contingency'),
-      pct('overhead_pct', 'Overhead (home office)'),
-      pct('profit_pct', 'Profit'),
-      pct('bond_pct', 'Bonds / guarantees'),
-      pct('tax_pct', 'Tax (e.g. ITBMS)')),
-    h('div', { class: 'hint', style: 'margin-top:6px' }, 'Each markup is applied to the running total, in the order shown.'),
-    h('h3', {}, 'Indicators'),
-    row('K factor (price excl. tax ÷ direct)', fmtN(s.k_factor, 4)),
-    row('Indirects as % of direct', s.direct ? fmtN((s.indirect / s.direct) * 100, 1) + '%' : '—'),
-    row('Profit share of contract price', share(s.markups.find((m) => m.key === 'profit').amount)),
-    row('Labor share of direct', s.direct ? fmtN((s.labor / s.direct) * 100, 1) + '%' : '—'),
-    row('Total crew-days', fmtN(s.duration_crew_days, 1)),
-    row('Total man-hours', fmtN(s.man_hours, 0)));
+      pct('contingency_pct', tr('Contingency')),
+      pct('overhead_pct', tr('Overhead (home office)')),
+      pct('profit_pct', tr('Profit')),
+      pct('bond_pct', tr('Bonds / guarantees')),
+      pct('tax_pct', tr('Tax (e.g. ITBMS)'))),
+    h('div', { class: 'hint', style: 'margin-top:6px' }, tr('Each markup is applied to the running total, in the order shown.')),
+    h('h3', {}, tr('Indicators')),
+    row(tr('K factor (price excl. tax ÷ direct)'), fmtN(s.k_factor, 4)),
+    row(tr('Indirects as % of direct'), s.direct ? fmtN((s.indirect / s.direct) * 100, 1) + '%' : '—'),
+    row(tr('Profit share of contract price'), share(s.markups.find((m) => m.key === 'profit').amount)),
+    row(tr('Labor share of direct'), s.direct ? fmtN((s.labor / s.direct) * 100, 1) + '%' : '—'),
+    row(tr('Total crew-days'), fmtN(s.duration_crew_days, 1)),
+    row(tr('Total man-hours'), fmtN(s.man_hours, 0)));
 }
 
 // ================================================================ REPORT
@@ -713,86 +740,86 @@ async function renderReport(id) {
     const lines = [];
     if (crew) {
       for (const m of crew.labor) {
-        lines.push(['Labor', m.trade, `${fmtQ(m.qty)} × ${fmtN(hrsPerUnit, 4)} h`, 'hr', money(m.loaded_rate), money(m.cost_hr * hrsPerUnit)]);
+        lines.push([tr('Labor'), m.trade, `${fmtQ(m.qty)} × ${fmtN(hrsPerUnit, 4)} h`, 'hr', money(m.loaded_rate), money(m.cost_hr * hrsPerUnit)]);
       }
       for (const m of crew.equipment) {
-        lines.push(['Equipment', m.description, `${fmtQ(m.qty)} × ${fmtN(hrsPerUnit, 4)} h`, 'hr', money(m.hourly_rate), money(m.cost_hr * hrsPerUnit)]);
+        lines.push([tr('Equipment'), m.description, `${fmtQ(m.qty)} × ${fmtN(hrsPerUnit, 4)} h`, 'hr', money(m.hourly_rate), money(m.cost_hr * hrsPerUnit)]);
       }
     }
     for (const r of t.resources) {
       const q = num(r.qty_per_unit) * (1 + num(r.waste_pct) / 100);
-      lines.push([r.kind === 'consumable' ? 'Consumable' : 'Material', r.description,
+      lines.push([r.kind === 'consumable' ? tr('Consumable') : tr('Material'), r.description,
         fmtQ(q) + (num(r.waste_pct) ? ` (incl. ${fmtQ(r.waste_pct)}% waste)` : ''), r.unit, money(r.unit_cost), money(r.unit_cost_per_task_unit)]);
     }
     return h('div', { class: 'apu' },
       h('div', { class: 'apu-head' },
         h('span', {}, `${i + 1}. ${t.code ? t.code + ' — ' : ''}${t.description}`),
-        h('span', {}, `Unit: ${t.unit}`)),
+        h('span', {}, tr('Unit: {unit}', { unit: t.unit }))),
       h('div', { class: 'hint' },
-        crew ? `Crew ${crew.code} (${crew.name}) at ${fmtQ(rate)} ${t.unit}/day, ${hpd} h/day → ${fmtN(hrsPerUnit, 4)} crew-h per ${t.unit}` : 'No crew assigned'),
+        crew ? tr('Crew {code} ({name}) at {rate} {unit}/day, {hpd} h/day → {hours} crew-h per {unit}', { code: crew.code, name: crew.name, rate: fmtQ(rate), unit: t.unit, hpd, hours: fmtN(hrsPerUnit, 4) }) : tr('No crew assigned')),
       h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'Type'), h('th', {}, 'Resource'), h('th', {}, 'Quantity / ' + t.unit),
-          h('th', {}, 'Unit'), h('th', { class: 'n' }, 'Rate'), h('th', { class: 'n' }, 'Cost / ' + t.unit))),
+        h('thead', {}, h('tr', {}, h('th', {}, tr('Type')), h('th', {}, tr('Resource')), h('th', {}, tr('Quantity / ') + t.unit),
+          h('th', {}, tr('Unit')), h('th', { class: 'n' }, tr('Rate')), h('th', { class: 'n' }, tr('Cost / ') + t.unit))),
         h('tbody', {}, lines.map((l) => h('tr', {}, l.map((v, k) => h('td', { class: k >= 4 ? 'n' : '' }, v))))),
         h('tfoot', {},
-          h('tr', { class: 'total' }, h('td', { colspan: 5 }, 'Direct unit cost'), h('td', { class: 'n' }, money(c.unit_cost))),
-          h('tr', { class: 'subtle' }, h('td', { colspan: 5 }, `Indirects, markups (K = ${fmtN(s.k_factor, 4)})`), h('td', { class: 'n' }, money(c.bid_unit_price - c.unit_cost))),
-          h('tr', {}, h('td', { colspan: 5 }, h('b', {}, 'Bid unit price (excl. tax)')), h('td', { class: 'n' }, h('b', {}, money(c.bid_unit_price)))))));
+          h('tr', { class: 'total' }, h('td', { colspan: 5 }, tr('Direct unit cost')), h('td', { class: 'n' }, money(c.unit_cost))),
+          h('tr', { class: 'subtle' }, h('td', { colspan: 5 }, tr('Indirects, markups (K = {k})', { k: fmtN(s.k_factor, 4) })), h('td', { class: 'n' }, money(c.bid_unit_price - c.unit_cost))),
+          h('tr', {}, h('td', { colspan: 5 }, h('b', {}, tr('Bid unit price (excl. tax)'))), h('td', { class: 'n' }, h('b', {}, money(c.bid_unit_price)))))));
   }
 
   function draw() {
     $app.replaceChildren(
       h('div', { class: 'page-head no-print' },
-        h('div', {}, h('a', { href: `#/estimate/${e.id}` }, '← Back to estimate')),
+        h('div', {}, h('a', { href: `#/estimate/${e.id}` }, tr('← Back to estimate'))),
         h('div', { class: 'actions' },
           h('label', {}, h('input', {
             type: 'checkbox', checked: showApu, style: 'width:auto;margin-right:6px',
             onchange: (ev) => { showApu = ev.target.checked; try { localStorage.setItem('kotiza-apu', showApu ? '1' : '0'); } catch (_) { /* ignore */ } draw(); },
-          }), 'Include internal cost analysis'),
-          h('button', { class: 'primary', onclick: () => window.print() }, 'Print / Save PDF'))),
+          }), tr('Include internal cost analysis')),
+          h('button', { class: 'primary', onclick: () => window.print() }, tr('Print / Save PDF')))),
       h('div', { class: 'report' },
         h('div', { class: 'report-brand' },
           h('img', { class: 'logo-light', src: '/brand/kotiza-lockup.svg', alt: 'Kotiza' }),
           h('img', { class: 'logo-dark', src: '/brand/kotiza-lockup-reverse.svg', alt: 'Kotiza' }),
-          h('span', {}, showApu ? 'Cost estimate · internal' : 'Quotation')),
+          h('span', {}, showApu ? tr('Cost estimate · internal') : tr('Quotation'))),
         h('h1', {}, e.name),
         h('div', { class: 'meta' },
-          h('div', {}, 'Client: ', h('b', {}, e.client || '—')),
-          h('div', {}, 'Location: ', h('b', {}, e.location || '—')),
-          h('div', {}, 'Date: ', h('b', {}, e.estimate_date || '—')),
-          h('div', {}, 'Currency: ', h('b', {}, e.currency)),
-          h('div', {}, 'Status: ', h('b', {}, e.status))),
+          h('div', {}, tr('Client: '), h('b', {}, e.client || '—')),
+          h('div', {}, tr('Location: '), h('b', {}, e.location || '—')),
+          h('div', {}, tr('Date: '), h('b', {}, e.estimate_date || '—')),
+          h('div', {}, tr('Currency: '), h('b', {}, e.currency)),
+          h('div', {}, tr('Status: '), h('b', {}, statusLabel(e.status)))),
         e.notes ? h('p', { style: 'white-space:pre-wrap' }, e.notes) : null,
 
-        h('h2', {}, 'Bill of quantities'),
+        h('h2', {}, tr('Bill of quantities')),
         h('table', {},
-          h('thead', {}, h('tr', {}, h('th', {}, 'Item'), h('th', {}, 'Description'), h('th', {}, 'Unit'),
-            h('th', { class: 'n' }, 'Quantity'), h('th', { class: 'n' }, 'Unit price'), h('th', { class: 'n' }, 'Amount'))),
+          h('thead', {}, h('tr', {}, h('th', {}, tr('Item')), h('th', {}, tr('Description')), h('th', {}, tr('Unit')),
+            h('th', { class: 'n' }, tr('Quantity')), h('th', { class: 'n' }, tr('Unit price')), h('th', { class: 'n' }, tr('Amount')))),
           h('tbody', {}, tasks.map((t, i) => h('tr', {},
             h('td', {}, i + 1), h('td', {}, t.description), h('td', {}, t.unit),
             h('td', { class: 'n' }, fmtQ(t.quantity)), h('td', { class: 'n' }, money(t.calc.bid_unit_price)),
             h('td', { class: 'n' }, money(t.calc.bid_total))))),
           h('tfoot', {},
-            h('tr', { class: 'total' }, h('td', { colspan: 5 }, 'Subtotal'), h('td', { class: 'n' }, money(s.price_before_tax))),
-            h('tr', {}, h('td', { colspan: 5 }, `Tax (${fmtN(s.tax_pct, 2)}%)`), h('td', { class: 'n' }, money(s.tax))),
-            h('tr', { class: 'total' }, h('td', { colspan: 5 }, 'CONTRACT PRICE'), h('td', { class: 'n' }, money(s.contract_price))))),
+            h('tr', { class: 'total' }, h('td', { colspan: 5 }, tr('Subtotal')), h('td', { class: 'n' }, money(s.price_before_tax))),
+            h('tr', {}, h('td', { colspan: 5 }, tr('Tax ({pct}%)', { pct: fmtN(s.tax_pct, 2) })), h('td', { class: 'n' }, money(s.tax))),
+            h('tr', { class: 'total' }, h('td', { colspan: 5 }, tr('CONTRACT PRICE')), h('td', { class: 'n' }, money(s.contract_price))))),
 
         showApu ? [
-          h('h2', {}, 'Cost build-up (internal)'),
+          h('h2', {}, tr('Cost build-up (internal)')),
           h('table', {}, h('tbody', {},
-            [['Labor', s.labor], ['Equipment', s.equipment], ['Materials', s.material], ['Consumables', s.consumable]]
+            [[tr('Labor'), s.labor], [tr('Equipment'), s.equipment], [tr('Materials'), s.material], [tr('Consumables'), s.consumable]]
               .map(([l, v]) => h('tr', {}, h('td', {}, l), h('td', { class: 'n' }, money(v)))),
-            h('tr', { class: 'total' }, h('td', {}, 'Direct cost'), h('td', { class: 'n' }, money(s.direct))),
+            h('tr', { class: 'total' }, h('td', {}, tr('Direct cost')), h('td', { class: 'n' }, money(s.direct))),
             indirects.map((it) => h('tr', { class: 'subtle' },
-              h('td', {}, '  ' + it.description + (it.method === 'lump' ? ` (${fmtQ(it.quantity)} ${it.unit} × ${money(it.rate)})` : ` (${fmtQ(it.percent)}% of ${it.method === 'pct_labor' ? 'labor' : 'direct'})`)),
+              h('td', {}, '  ' + it.description + (it.method === 'lump' ? ` (${fmtQ(it.quantity)} ${it.unit} × ${money(it.rate)})` : ` (${it.method === 'pct_labor' ? tr('{pct}% of labor', { pct: fmtQ(it.percent) }) : tr('{pct}% of direct', { pct: fmtQ(it.percent) })})`)),
               h('td', { class: 'n' }, money(it.amount)))),
-            h('tr', {}, h('td', {}, 'Indirect costs'), h('td', { class: 'n' }, money(s.indirect))),
-            h('tr', { class: 'total' }, h('td', {}, 'Total cost'), h('td', { class: 'n' }, money(s.cost))),
-            s.markups.map((m) => h('tr', {}, h('td', {}, `${m.label} (${fmtN(m.percent, 2)}%)`), h('td', { class: 'n' }, money(m.amount)))),
-            h('tr', { class: 'total' }, h('td', {}, 'Price before tax'), h('td', { class: 'n' }, money(s.price_before_tax))),
-            h('tr', {}, h('td', {}, `Tax (${fmtN(s.tax_pct, 2)}%)`), h('td', { class: 'n' }, money(s.tax))),
-            h('tr', { class: 'total' }, h('td', {}, 'Contract price'), h('td', { class: 'n' }, money(s.contract_price))))),
-          h('h2', {}, 'Unit price analysis (internal)'),
+            h('tr', {}, h('td', {}, tr('Indirect costs')), h('td', { class: 'n' }, money(s.indirect))),
+            h('tr', { class: 'total' }, h('td', {}, tr('Total cost')), h('td', { class: 'n' }, money(s.cost))),
+            s.markups.map((m) => h('tr', {}, h('td', {}, `${tr(m.label)} (${fmtN(m.percent, 2)}%)`), h('td', { class: 'n' }, money(m.amount)))),
+            h('tr', { class: 'total' }, h('td', {}, tr('Price before tax')), h('td', { class: 'n' }, money(s.price_before_tax))),
+            h('tr', {}, h('td', {}, tr('Tax ({pct}%)', { pct: fmtN(s.tax_pct, 2) })), h('td', { class: 'n' }, money(s.tax))),
+            h('tr', { class: 'total' }, h('td', {}, tr('Contract price')), h('td', { class: 'n' }, money(s.contract_price))))),
+          h('h2', {}, tr('Unit price analysis (internal)')),
           tasks.map(apu),
         ] : null));
   }
@@ -807,28 +834,28 @@ async function renderCrews() {
   const list = refs.crews;
   $app.replaceChildren(
     h('div', { class: 'page-head' },
-      h('div', {}, h('h1', {}, 'Crews'),
-        h('div', { class: 'sub' }, 'A crew combines labor trades and equipment into one hourly cost. Tasks use a crew at a production rate. Costs shown at private-works wages; estimates set to public works use public wages.')),
-      h('button', { class: 'primary', onclick: () => editCrew(null) }, '+ New crew')),
+      h('div', {}, h('h1', {}, tr('Crews')),
+        h('div', { class: 'sub' }, tr('A crew combines labor trades and equipment into one hourly cost. Tasks use a crew at a production rate. Costs shown at private-works wages; estimates set to public works use public wages.'))),
+      h('button', { class: 'primary', onclick: () => editCrew(null) }, tr('+ New crew'))),
     h('div', { class: 'panel' }, h('div', { class: 'table-wrap' }, h('table', {},
-      h('thead', {}, h('tr', {}, h('th', {}, 'Code'), h('th', {}, 'Name'), h('th', {}, 'Composition'),
-        h('th', { class: 'n' }, 'Headcount'), h('th', { class: 'n' }, 'Labor $/hr'), h('th', { class: 'n' }, 'Equip. $/hr'),
-        h('th', { class: 'n' }, 'Crew $/hr'), h('th', { class: 'n' }, 'Crew $/day (8h)'), h('th', {}))),
+      h('thead', {}, h('tr', {}, h('th', {}, tr('Code')), h('th', {}, tr('Name')), h('th', {}, tr('Composition')),
+        h('th', { class: 'n' }, tr('Headcount')), h('th', { class: 'n' }, tr('Labor $/hr')), h('th', { class: 'n' }, tr('Equip. $/hr')),
+        h('th', { class: 'n' }, tr('Crew $/hr')), h('th', { class: 'n' }, tr('Crew $/day (8h)')), h('th', {}))),
       h('tbody', {}, list.length ? list.map((c) => h('tr', {},
         h('td', { class: 'code' }, c.code), h('td', {}, h('b', {}, c.name), c.description ? h('div', { class: 'hint' }, c.description) : null),
         h('td', { class: 'hint' }, [...c.labor.map((m) => `${fmtQ(m.qty)} ${m.trade}`), ...c.equipment.map((m) => `${fmtQ(m.qty)} ${m.description}`)].join(', ')),
         h('td', { class: 'n' }, fmtQ(c.headcount)),
         h('td', { class: 'n' }, money(c.labor_hourly)), h('td', { class: 'n' }, money(c.equipment_hourly)),
         h('td', { class: 'n' }, h('b', {}, money(c.hourly_cost))), h('td', { class: 'n' }, money(c.hourly_cost * 8)),
-        h('td', { class: 'actions-cell' }, h('button', { onclick: () => editCrew(c) }, 'Edit'), ' ',
+        h('td', { class: 'actions-cell' }, h('button', { onclick: () => editCrew(c) }, tr('Edit')), ' ',
           h('button', {
             class: 'danger', onclick: async () => {
-              if (!confirmBox(`Delete crew ${c.code}?`)) return;
-              await attempt(() => api('DELETE', `/crews/${c.id}`), 'Deleted');
+              if (!confirmBox(tr('Delete crew {code}?', { code: c.code }))) return;
+              await attempt(() => api('DELETE', `/crews/${c.id}`), tr('Deleted'));
               renderCrews();
             },
-          }, 'Delete'))))
-        : h('tr', {}, h('td', { colspan: 9, class: 'empty' }, 'No crews yet.')))))));
+          }, tr('Delete')))))
+        : h('tr', {}, h('td', { colspan: 9, class: 'empty' }, tr('No crews yet.'))))))));
 }
 
 function editCrew(crew) {
@@ -848,7 +875,7 @@ function editCrew(crew) {
       labHr += rate * num(m.qty); heads += num(m.qty);
       return h('tr', {},
         h('td', {}, h('select', { dataset: { fk: `cl-${i}` }, onchange: (ev) => { m.labor_id = ev.target.value; draw(); } },
-          options(refs.labor.map((x) => ({ value: x.id, label: `${x.code} — ${x.trade}` })), m.labor_id, { blank: '— select —' }))),
+          options(refs.labor.map((x) => ({ value: x.id, label: `${x.code} — ${x.trade}` })), m.labor_id, { blank: tr('— select —') }))),
         h('td', { style: 'width:110px' }, numInput(m.qty, { dataset: { fk: `clq-${i}` }, onchange: (ev) => { m.qty = ev.target.value; draw(); } })),
         h('td', { class: 'n' }, money(rate)), h('td', { class: 'n' }, money(rate * num(m.qty))),
         h('td', { class: 'actions-cell' }, h('button', { class: 'icon danger', onclick: () => { st.labor.splice(i, 1); draw(); } }, '✕')));
@@ -859,7 +886,7 @@ function editCrew(crew) {
       eqHr += rate * num(m.qty);
       return h('tr', {},
         h('td', {}, h('select', { dataset: { fk: `ce-${i}` }, onchange: (ev) => { m.equipment_id = ev.target.value; draw(); } },
-          options(refs.equipment.map((x) => ({ value: x.id, label: `${x.code} — ${x.description}` })), m.equipment_id, { blank: '— select —' }))),
+          options(refs.equipment.map((x) => ({ value: x.id, label: `${x.code} — ${x.description}` })), m.equipment_id, { blank: tr('— select —') }))),
         h('td', { style: 'width:110px' }, numInput(m.qty, { dataset: { fk: `ceq-${i}` }, onchange: (ev) => { m.qty = ev.target.value; draw(); } })),
         h('td', { class: 'n' }, money(rate)), h('td', { class: 'n' }, money(rate * num(m.qty))),
         h('td', { class: 'actions-cell' }, h('button', { class: 'icon danger', onclick: () => { st.equipment.splice(i, 1); draw(); } }, '✕')));
@@ -867,28 +894,28 @@ function editCrew(crew) {
 
     const body = h('div', {},
       h('div', { class: 'grid' },
-        field('Code', h('input', { value: st.code, dataset: { fk: 'c-code' }, oninput: (ev) => { st.code = ev.target.value; } })),
-        field('Name', h('input', { value: st.name, dataset: { fk: 'c-name' }, oninput: (ev) => { st.name = ev.target.value; } })),
-        field('Description', h('input', { value: st.description, dataset: { fk: 'c-desc' }, oninput: (ev) => { st.description = ev.target.value; } }), 'wide')),
-      h('h3', {}, 'Labor'),
-      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Trade'), h('th', { class: 'n' }, 'Qty'), h('th', { class: 'n' }, 'Loaded $/hr'), h('th', { class: 'n' }, 'Cost/hr'), h('th', {}))),
+        field(tr('Code'), h('input', { value: st.code, dataset: { fk: 'c-code' }, oninput: (ev) => { st.code = ev.target.value; } })),
+        field(tr('Name'), h('input', { value: st.name, dataset: { fk: 'c-name' }, oninput: (ev) => { st.name = ev.target.value; } })),
+        field(tr('Description'), h('input', { value: st.description, dataset: { fk: 'c-desc' }, oninput: (ev) => { st.description = ev.target.value; } }), 'wide')),
+      h('h3', {}, tr('Labor')),
+      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, tr('Trade')), h('th', { class: 'n' }, tr('Qty')), h('th', { class: 'n' }, tr('Loaded $/hr')), h('th', { class: 'n' }, tr('Cost/hr')), h('th', {}))),
         h('tbody', {}, labRows)),
-      h('button', { class: 'icon', style: 'margin-top:6px', onclick: () => { st.labor.push({ labor_id: '', qty: 1 }); draw(); } }, '+ Add trade'),
-      h('h3', {}, 'Equipment'),
-      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Equipment'), h('th', { class: 'n' }, 'Qty'), h('th', { class: 'n' }, '$/hr'), h('th', { class: 'n' }, 'Cost/hr'), h('th', {}))),
+      h('button', { class: 'icon', style: 'margin-top:6px', onclick: () => { st.labor.push({ labor_id: '', qty: 1 }); draw(); } }, tr('+ Add trade')),
+      h('h3', {}, tr('Equipment')),
+      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, tr('Equipment')), h('th', { class: 'n' }, tr('Qty')), h('th', { class: 'n' }, '$/hr'), h('th', { class: 'n' }, tr('Cost/hr')), h('th', {}))),
         h('tbody', {}, eqRows)),
-      h('button', { class: 'icon', style: 'margin-top:6px', onclick: () => { st.equipment.push({ equipment_id: '', qty: 1 }); draw(); } }, '+ Add equipment'),
+      h('button', { class: 'icon', style: 'margin-top:6px', onclick: () => { st.equipment.push({ equipment_id: '', qty: 1 }); draw(); } }, tr('+ Add equipment')),
       h('div', { class: 'preview-box' },
-        h('div', {}, h('span', {}, 'Headcount'), h('b', {}, fmtQ(heads))),
-        h('div', {}, h('span', {}, 'Labor $/hr'), h('b', {}, money(labHr))),
-        h('div', {}, h('span', {}, 'Equipment $/hr'), h('b', {}, money(eqHr))),
-        h('div', {}, h('span', {}, 'Crew $/hr'), h('b', {}, money(labHr + eqHr))),
-        h('div', {}, h('span', {}, 'Crew $/day (8h)'), h('b', {}, money((labHr + eqHr) * 8)))));
+        h('div', {}, h('span', {}, tr('Headcount')), h('b', {}, fmtQ(heads))),
+        h('div', {}, h('span', {}, tr('Labor $/hr')), h('b', {}, money(labHr))),
+        h('div', {}, h('span', {}, tr('Equipment $/hr')), h('b', {}, money(eqHr))),
+        h('div', {}, h('span', {}, tr('Crew $/hr')), h('b', {}, money(labHr + eqHr))),
+        h('div', {}, h('span', {}, tr('Crew $/day (8h)')), h('b', {}, money((labHr + eqHr) * 8)))));
 
-    openModal(crew ? `Edit crew ${crew.code}` : 'New crew', body, [
+    openModal(crew ? tr('Edit crew {code}', { code: crew.code }) : tr('New crew'), body, [
       h('span', {}),
       h('div', { class: 'actions' },
-        h('button', { onclick: () => $modal.close() }, 'Cancel'),
+        h('button', { onclick: () => $modal.close() }, tr('Cancel')),
         h('button', {
           class: 'primary', onclick: async () => {
             const payload = {
@@ -896,12 +923,12 @@ function editCrew(crew) {
               labor: st.labor.filter((m) => m.labor_id),
               equipment: st.equipment.filter((m) => m.equipment_id),
             };
-            if (crew) await attempt(() => api('PUT', `/crews/${crew.id}`, payload), 'Crew saved');
-            else await attempt(() => api('POST', '/crews', payload), 'Crew created');
+            if (crew) await attempt(() => api('PUT', `/crews/${crew.id}`, payload), tr('Crew saved'));
+            else await attempt(() => api('POST', '/crews', payload), tr('Crew created'));
             $modal.close();
             renderCrews();
           },
-        }, 'Save crew'))]);
+        }, tr('Save crew')))]);
     if (fk) { const el = $modal.querySelector(`[data-fk="${esc(fk)}"]`); if (el) el.focus(); }
   }
   draw();
@@ -920,7 +947,7 @@ async function renderLibrary() {
     mode: 'library',
     task: t || { code: '', description: '', category: '', unit: 'm2', crew_id: null, production_rate: 0, resources: [] },
     hpd: 8,
-    title: t ? `Edit standard task ${t.code}` : 'New standard task',
+    title: t ? tr('Edit standard task {code}', { code: t.code }) : tr('New standard task'),
     onSave: async (data) => {
       if (t) await api('PUT', `/library/${t.id}`, data);
       else await api('POST', '/library', data);
@@ -931,123 +958,128 @@ async function renderLibrary() {
 
   $app.replaceChildren(
     h('div', { class: 'page-head' },
-      h('div', {}, h('h1', {}, 'Task library'),
-        h('div', { class: 'sub' }, 'Standard tasks (unit-price analyses) you can drop into any estimate. Changes here do not alter tasks already in estimates.')),
+      h('div', {}, h('h1', {}, tr('Task library')),
+        h('div', { class: 'sub' }, tr('Standard tasks (unit-price analyses) you can drop into any estimate. Changes here do not alter tasks already in estimates.'))),
       h('div', { class: 'actions' },
         h('input', {
-          placeholder: 'Search…', style: 'width:220px', value: libraryFilter, dataset: { fk: 'lib-search' },
+          placeholder: tr('Search…'), style: 'width:220px', value: libraryFilter, dataset: { fk: 'lib-search' },
           oninput: (ev) => { libraryFilter = ev.target.value; keepFocus(renderLibrary); },
         }),
         h('button', {
           onclick: async () => {
-            if (!confirmBox('Load the CAPAC–SUNTRACS minimum productivity table (Anexo IA)?\n\nAdds ~65 labor-only standard tasks (codes RM-…) and the matching crews (CV-…). Re-loading updates them; your own tasks are not touched.')) return;
+            if (!confirmBox(tr('Load the CAPAC–SUNTRACS minimum productivity table (Anexo IA)?\n\nAdds ~65 labor-only standard tasks (codes RM-…) and the matching crews (CV-…). Re-loading updates them; your own tasks are not touched.'))) return;
             const r = await attempt(() => api('POST', '/library/load-rendimientos'));
-            toast(`Productivity table loaded: ${r.inserted} added, ${r.updated} updated`);
+            toast(tr('Productivity table loaded: {added} added, {updated} updated', { added: r.inserted, updated: r.updated }));
             renderLibrary();
           },
-        }, 'Load CAPAC–SUNTRACS productivity (Anexo IA)'),
-        h('button', { class: 'primary', onclick: () => edit(null) }, '+ New standard task'))),
+        }, tr('Load CAPAC–SUNTRACS productivity (Anexo IA)')),
+        h('button', { class: 'primary', onclick: () => edit(null) }, tr('+ New standard task')))),
     h('div', { class: 'panel' }, h('div', { class: 'table-wrap' }, h('table', {},
-      h('thead', {}, h('tr', {}, h('th', {}, 'Code'), h('th', {}, 'Description'), h('th', {}, 'Category'),
-        h('th', {}, 'Unit'), h('th', {}, 'Crew'), h('th', { class: 'n' }, 'Rate/day'),
-        h('th', { class: 'n' }, 'Resources'), h('th', { class: 'n' }, 'Direct unit cost*'), h('th', {}))),
+      h('thead', {}, h('tr', {}, h('th', {}, tr('Code')), h('th', {}, tr('Description')), h('th', {}, tr('Category')),
+        h('th', {}, tr('Unit')), h('th', {}, tr('Crew')), h('th', { class: 'n' }, tr('Rate/day')),
+        h('th', { class: 'n' }, tr('Resources')), h('th', { class: 'n' }, tr('Direct unit cost*')), h('th', {}))),
       h('tbody', {}, list.length ? list.map((t) => h('tr', {},
         h('td', { class: 'code' }, t.code), h('td', { title: t.notes }, h('b', {}, t.description)), h('td', {}, t.category),
         h('td', {}, t.unit), h('td', {}, t.crew_name || '—'), h('td', { class: 'n' }, fmtQ(t.production_rate)),
         h('td', { class: 'n' }, t.resources.length), h('td', { class: 'n' }, money(t.unit_cost_preview)),
-        h('td', { class: 'actions-cell' }, h('button', { onclick: () => edit(t) }, 'Edit'), ' ',
+        h('td', { class: 'actions-cell' }, h('button', { onclick: () => edit(t) }, tr('Edit')), ' ',
           h('button', {
             class: 'danger', onclick: async () => {
-              if (!confirmBox(`Delete standard task ${t.code}?`)) return;
-              await attempt(() => api('DELETE', `/library/${t.id}`), 'Deleted');
+              if (!confirmBox(tr('Delete standard task {code}?', { code: t.code }))) return;
+              await attempt(() => api('DELETE', `/library/${t.id}`), tr('Deleted'));
               renderLibrary();
             },
-          }, 'Delete'))))
-        : h('tr', {}, h('td', { colspan: 9, class: 'empty' }, 'No standard tasks yet.'))))),
-    h('div', { class: 'hint', style: 'margin-top:8px' }, '* At current database prices and 8 working hours per day.')));
+          }, tr('Delete')))))
+        : h('tr', {}, h('td', { colspan: 9, class: 'empty' }, tr('No standard tasks yet.')))))),
+    h('div', { class: 'hint', style: 'margin-top:8px' }, tr('* At current database prices and 8 working hours per day.'))));
 }
 
 // ================================================================ SIMPLE TABLES
 
 const SIMPLE = {
   labor: {
-    title: 'Labor trades', path: '/labor', search: true,
-    hint: 'Hourly wage for private works, public works and special projects (Cl. 127: Metro, 4th bridge… = private + 11%), plus burden. The loaded rate is what crews cost.',
-    tableTitle: 'Trades',
+    title: tr('Labor trades'), path: '/labor', search: true,
+    filters: [{ field: 'category', all: tr('All groups') }],
+    hint: tr('Hourly wage for private works, public works and special projects (Cl. 127: Metro, 4th bridge… = private + 11%), plus burden. The loaded rate is what crews cost.'),
+    tableTitle: tr('Trades'),
     before: renderBurdenPanels,
     headActions: (reload) => h('button', {
       class: 'primary', onclick: async () => {
-        if (!confirmBox('Load the CAPAC–SUNTRACS convention wages (Cl. 125–127, July 2025)?\n\nAll occupations are matched by code. Existing ones get the convention wages (private, public, special projects) and switch to Standard burden; missing ones are added. Trades with other codes are not touched.')) return;
+        if (!confirmBox(tr('Load the CAPAC–SUNTRACS convention wages (Cl. 125–127, July 2025)?\n\nAll occupations are matched by code. Existing ones get the convention wages (private, public, special projects) and switch to Standard burden; missing ones are added. Trades with other codes are not touched.'))) return;
         const r = await attempt(() => api('POST', '/labor/load-capac'));
-        toast(`CAPAC–SUNTRACS rates loaded: ${r.updated} updated, ${r.inserted} added`);
+        toast(tr('CAPAC–SUNTRACS rates loaded: {updated} updated, {added} added', { updated: r.updated, added: r.inserted }));
         reload();
       },
-    }, 'Load CAPAC–SUNTRACS rates'),
+    }, tr('Load CAPAC–SUNTRACS rates')),
     cols: [
-      { f: 'code', label: 'Code', w: 75 }, { f: 'trade', label: 'Occupation' },
-      { f: 'category', label: 'Group', w: 150 },
-      { f: 'base_rate', label: 'Wage private', num: true, w: 80 },
-      { f: 'public_rate', label: 'Wage public', num: true, w: 80 },
-      { f: 'special_rate', label: 'Wage special', num: true, w: 80 },
-      { f: 'use_standard_burden', label: 'Burden', w: 105, select: [['1', 'Standard'], ['0', 'Custom']] },
-      { f: 'burden_pct', label: 'Custom %', num: true, w: 70, disabled: (r) => String(r.use_standard_burden) === '1' },
-      { calc: (r) => (r.loaded_rate === undefined ? '' : money(r.loaded_rate)), label: 'Loaded private' },
-      { calc: (r) => (r.loaded_public === undefined ? '' : money(r.loaded_public)), label: 'Loaded public' },
-      { calc: (r) => (r.loaded_special === undefined ? '' : money(r.loaded_special)), label: 'Loaded special' },
+      { f: 'code', label: tr('Code'), w: 75 }, { f: 'trade', label: tr('Occupation') },
+      { f: 'category', label: tr('Group'), w: 150 },
+      { f: 'base_rate', label: tr('Wage private'), num: true, w: 80 },
+      { f: 'public_rate', label: tr('Wage public'), num: true, w: 80 },
+      { f: 'special_rate', label: tr('Wage special'), num: true, w: 80 },
+      { f: 'use_standard_burden', label: tr('Burden'), w: 105, select: [['1', tr('Standard')], ['0', tr('Custom')]] },
+      { f: 'burden_pct', label: tr('Custom %'), num: true, w: 70, disabled: (r) => String(r.use_standard_burden) === '1' },
+      { calc: (r) => (r.loaded_rate === undefined ? '' : money(r.loaded_rate)), label: tr('Loaded private') },
+      { calc: (r) => (r.loaded_public === undefined ? '' : money(r.loaded_public)), label: tr('Loaded public') },
+      { calc: (r) => (r.loaded_special === undefined ? '' : money(r.loaded_special)), label: tr('Loaded special') },
     ],
     blank: { code: '', trade: '', category: '', base_rate: 0, public_rate: 0, special_rate: 0, use_standard_burden: 1, burden_pct: 0 },
   },
   equipment: {
-    title: 'Equipment', path: '/equipment',
-    hint: 'Hourly cost including ownership or rental, fuel, and maintenance. Operators are added to crews as labor.',
+    title: tr('Equipment'), path: '/equipment',
+    hint: tr('Hourly cost including ownership or rental, fuel, and maintenance. Operators are added to crews as labor.'),
     cols: [
-      { f: 'code', label: 'Code', w: 100 }, { f: 'description', label: 'Description' },
-      { f: 'hourly_rate', label: 'Cost / hr', num: true, w: 130 },
+      { f: 'code', label: tr('Code'), w: 100 }, { f: 'description', label: tr('Description') },
+      { f: 'hourly_rate', label: tr('Cost / hr'), num: true, w: 130 },
     ],
     blank: { code: '', description: '', hourly_rate: 0 },
   },
   materials: {
-    title: 'Materials & consumables', path: '/materials', search: true, groupFilter: 'category', maxRows: 250,
-    hint: 'Materials are incorporated into the work; consumables are used up doing it (wire, nails, discs…). Waste % is added to quantities. Changing a price stamps today’s date; prices older than a year are flagged.',
+    title: tr('Materials & consumables'), path: '/materials', search: true, maxRows: 250,
+    filters: [
+      { field: 'category', all: tr('All categories') },
+      { field: 'kind', all: tr('All types'), labels: { material: tr('Materials'), consumable: tr('Consumables') } },
+    ],
+    hint: tr('Materials are incorporated into the work; consumables are used up doing it (wire, nails, discs…). Waste % is added to quantities. Changing a price stamps today’s date; prices older than a year are flagged.'),
     headActions: materialsActions,
     // Editing a price records when it was updated.
     extraOnChange: (f) => (f === 'unit_cost' ? { price_date: new Date().toISOString().slice(0, 10) } : {}),
     cols: [
-      { f: 'code', label: 'Code', w: 105 },
-      { f: 'description', label: 'Description', title: (r) => r.notes },
-      { f: 'kind', label: 'Type', w: 115, select: [['material', 'Material'], ['consumable', 'Consumable']] },
-      { f: 'category', label: 'Category', w: 150, list: 'mat-cats' },
-      { f: 'unit', label: 'Unit', w: 70, units: true },
-      { f: 'unit_cost', label: 'Unit cost', num: true, w: 95 },
-      { f: 'waste_pct', label: 'Waste %', num: true, w: 70 },
-      { f: 'source', label: 'Price source', w: 140 },
-      { f: 'price_date', label: 'Price date', w: 135, type: 'date', tdClass: (r) => (priceAgeDays(r.price_date) > 365 ? 'stale' : '') },
+      { f: 'code', label: tr('Code'), w: 105 },
+      { f: 'description', label: tr('Description'), title: (r) => r.notes },
+      { f: 'kind', label: tr('Type'), w: 115, select: [['material', tr('Material')], ['consumable', tr('Consumable')]] },
+      { f: 'category', label: tr('Category'), w: 150, list: 'mat-cats' },
+      { f: 'unit', label: tr('Unit'), w: 70, units: true },
+      { f: 'unit_cost', label: tr('Unit cost'), num: true, w: 95 },
+      { f: 'waste_pct', label: tr('Waste %'), num: true, w: 70 },
+      { f: 'source', label: tr('Price source'), w: 140 },
+      { f: 'price_date', label: tr('Price date'), w: 135, type: 'date', tdClass: (r) => (priceAgeDays(r.price_date) > 365 ? 'stale' : '') },
     ],
     blank: { code: '', description: '', kind: 'material', category: '', unit: 'und', unit_cost: 0, waste_pct: 0, source: '', price_date: '' },
   },
   'indirect-library': {
-    title: 'Indirect cost library', path: '/indirect-library',
-    hint: 'Standard indirect items to add to estimates: site staff and facilities (quantity × rate, e.g. per month), or a % of direct cost or direct labor.',
+    title: tr('Indirect cost library'), path: '/indirect-library',
+    hint: tr('Standard indirect items to add to estimates: site staff and facilities (quantity × rate, e.g. per month), or a % of direct cost or direct labor.'),
     cols: [
-      { f: 'description', label: 'Description' }, { f: 'category', label: 'Category', w: 130 },
-      { f: 'method', label: 'Method', w: 170, select: Object.entries(METHOD_LABELS) },
-      { f: 'unit', label: 'Unit', w: 90, units: true },
-      { f: 'rate', label: 'Rate', num: true, w: 120 },
+      { f: 'description', label: tr('Description') }, { f: 'category', label: tr('Category'), w: 130 },
+      { f: 'method', label: tr('Method'), w: 170, select: Object.entries(METHOD_LABELS) },
+      { f: 'unit', label: tr('Unit'), w: 90, units: true },
+      { f: 'rate', label: tr('Rate'), num: true, w: 120 },
       { f: 'percent', label: '%', num: true, w: 90 },
     ],
     blank: { description: '', category: '', method: 'lump', unit: 'month', rate: 0, percent: 0 },
   },
   units: {
-    title: 'Units of measure', path: '/units',
-    hint: 'Units offered when defining tasks and materials (you can also type any unit).',
-    cols: [{ f: 'code', label: 'Code', w: 140 }, { f: 'name', label: 'Name' }],
+    title: tr('Units of measure'), path: '/units',
+    hint: tr('Units offered when defining tasks and materials (you can also type any unit).'),
+    cols: [{ f: 'code', label: tr('Code'), w: 140 }, { f: 'name', label: tr('Name') }],
     blank: { code: '', name: '' },
   },
 };
 
 let simpleFilter = '';
 let simpleFilterKey = '';
-let simpleGroup = '';
+let simpleGroups = {};      // active filter values per field on the current page
 let simpleGroupKey = '';
 
 function priceAgeDays(d) {
@@ -1063,41 +1095,41 @@ function materialsActions(reload, matched) {
       const f = ev.target.files[0];
       if (!f) return;
       const text = await f.text();
-      const source = prompt('Price source for these rows (supplier, quote no.…) — used where the CSV has no "source" column:', f.name.replace(/\.csv$/i, ''));
+      const source = prompt(tr('Price source for these rows (supplier, quote no.…) — used where the CSV has no "source" column:'), f.name.replace(/\.csv$/i, ''));
       if (source === null) return;
       const r = await attempt(() => api('POST', '/materials/import', { csv: text, source, price_date: new Date().toISOString().slice(0, 10) }));
-      toast(`Imported: ${r.updated} updated, ${r.inserted} added${r.error_count ? `, ${r.error_count} rows with errors` : ''}`, r.error_count > 0);
-      if (r.error_count) alert('Rows not imported:\n\n' + r.errors.join('\n') + (r.error_count > r.errors.length ? `\n…and ${r.error_count - r.errors.length} more` : ''));
+      toast(tr('Imported: {updated} updated, {added} added', { updated: r.updated, added: r.inserted }) + (r.error_count ? tr(', {n} rows with errors', { n: r.error_count }) : ''), r.error_count > 0);
+      if (r.error_count) alert(tr('Rows not imported:\n\n') + r.errors.join('\n') + (r.error_count > r.errors.length ? tr('\n…and {n} more', { n: r.error_count - r.errors.length }) : ''));
       reload();
     },
   });
   return [
     h('button', {
       class: 'primary', onclick: async () => {
-        if (!confirmBox('Load the Contraloría reference prices (Base de Datos de Costos Directos v002, July 2025)?\n\n870 materials used in public-works cost analyses for Panamá and Panamá Oeste. Rows previously loaded from this source are updated. Materials with the same code from other sources (your own prices) are not touched.')) return;
+        if (!confirmBox(tr('Load the Contraloría reference prices (Base de Datos de Costos Directos v002, July 2025)?\n\n870 materials used in public-works cost analyses for Panamá and Panamá Oeste. Rows previously loaded from this source are updated. Materials with the same code from other sources (your own prices) are not touched.'))) return;
         const r = await attempt(() => api('POST', '/materials/load-cgr'));
-        toast(`Contraloría prices: ${r.inserted} added, ${r.updated} updated${r.skipped.length ? `, ${r.skipped.length} skipped (code already used by your own material: ${r.skipped.slice(0, 5).join(', ')})` : ''}`);
+        toast(tr('Contraloría prices: {added} added, {updated} updated', { added: r.inserted, updated: r.updated }) + (r.skipped.length ? tr(', {n} skipped (code already used by your own material: {codes})', { n: r.skipped.length, codes: r.skipped.slice(0, 5).join(', ') }) : ''));
         reload();
       },
-    }, 'Load Contraloría prices'),
+    }, tr('Load Contraloría prices')),
     h('button', {
-      title: 'Escalate the prices of the materials currently listed (use the category filter / search first), e.g. by an INEC price-index change',
+      title: tr('Escalate the prices of the materials currently listed (use the category filter / search first), e.g. by an INEC price-index change'),
       onclick: async () => {
-        if (!matched.length) return toast('No materials listed', true);
-        const pct = prompt(`Adjust the price of the ${matched.length} listed materials by what percentage? (e.g. 7.5 or -3)`);
+        if (!matched.length) return toast(tr('No materials listed'), true);
+        const pct = prompt(tr('Adjust the price of the {n} listed materials by what percentage? (e.g. 7.5 or -3)', { n: matched.length }));
         if (pct === null || !pct.trim()) return;
-        if (!Number.isFinite(parseFloat(pct))) return toast('Enter a number', true);
-        const note = prompt('Reason, saved with the price source (e.g. "INEC IPMC jul-2026"):', 'INEC IPMC');
+        if (!Number.isFinite(parseFloat(pct))) return toast(tr('Enter a number'), true);
+        const note = prompt(tr('Reason, saved with the price source (e.g. "INEC IPMC jul-2026"):'), 'INEC IPMC');
         if (note === null) return;
         const r = await attempt(() => api('POST', '/materials/adjust', {
           ids: matched.map((m) => m.id), percent: pct, note, price_date: new Date().toISOString().slice(0, 10),
         }));
-        toast(`${r.updated} prices adjusted by ${pct}%`);
+        toast(tr('{n} prices adjusted by {pct}%', { n: r.updated, pct }));
         reload();
       },
-    }, 'Adjust listed prices %…'),
-    h('a', { class: 'btn', href: '/api/materials/export.csv' }, 'Export CSV'),
-    h('button', { onclick: () => file.click(), title: 'CSV with a header row: code, description, kind, category, unit, unit_cost, waste_pct, source, price_date, notes. Rows are matched by code; only the columns present are updated.' }, 'Import CSV…'),
+    }, tr('Adjust listed prices %…')),
+    h('a', { class: 'btn', href: '/api/materials/export.csv' }, tr('Export CSV')),
+    h('button', { onclick: () => file.click(), title: tr('CSV with a header row: code, description, kind, category, unit, unit_cost, waste_pct, source, price_date, notes. Rows are matched by code; only the columns present are updated.') }, tr('Import CSV…')),
     file,
   ];
 }
@@ -1123,11 +1155,12 @@ async function renderSimple(key) {
   };
 
   const q = simpleFilter.toLowerCase();
-  const gf = def.groupFilter;
-  if (simpleGroupKey !== key) { simpleGroup = ''; simpleGroupKey = key; }
-  const groups = gf ? [...new Set(rows.map((r) => r[gf]).filter(Boolean))].sort() : [];
+  const filters = def.filters || [];
+  if (simpleGroupKey !== key) { simpleGroups = {}; simpleGroupKey = key; }
+  const valuesOf = (field) => [...new Set(rows.map((r) => String(r[field] ?? '')).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const groups = valuesOf('category');
   const matched = rows
-    .filter((r) => !gf || !simpleGroup || r[gf] === simpleGroup)
+    .filter((r) => filters.every((f) => !simpleGroups[f.field] || String(r[f.field] ?? '') === simpleGroups[f.field]))
     .filter((r) => !(def.search && q) || Object.values(r).some((v) => String(v).toLowerCase().includes(q)));
   const shown = def.maxRows ? matched.slice(0, def.maxRows) : matched;
 
@@ -1141,23 +1174,23 @@ async function renderSimple(key) {
       }))),
     h('td', { class: 'actions-cell' }, h('button', {
       class: 'primary icon', onclick: async () => {
-        await attempt(() => api('POST', def.path, fresh), 'Added');
+        await attempt(() => api('POST', def.path, fresh), tr('Added'));
         renderSimple(key);
       },
-    }, 'Add')));
+    }, tr('Add'))));
 
   const bodyRows = shown.map((r) => h('tr', {},
     def.cols.map((c) => h('td', { class: [c.calc ? 'n' : '', c.tdClass ? c.tdClass(r) : ''].join(' ').trim() || null },
       c.calc ? c.calc(r) : input(r, c, async (ev) => {
         try {
           const extra = def.extraOnChange ? def.extraOnChange(c.f) : {};
-          await attempt(() => api('PUT', `${def.path}/${r.id}`, { [c.f]: ev.target.value, ...extra }), 'Saved');
+          await attempt(() => api('PUT', `${def.path}/${r.id}`, { [c.f]: ev.target.value, ...extra }), tr('Saved'));
         } finally { reload(); }
       }))),
     h('td', { class: 'actions-cell' }, h('button', {
       class: 'icon danger', onclick: async () => {
-        if (!confirmBox('Delete this record?')) return;
-        await attempt(() => api('DELETE', `${def.path}/${r.id}`), 'Deleted');
+        if (!confirmBox(tr('Delete this record?'))) return;
+        await attempt(() => api('DELETE', `${def.path}/${r.id}`), tr('Deleted'));
         renderSimple(key);
       },
     }, '✕'))));
@@ -1169,23 +1202,25 @@ async function renderSimple(key) {
     h('div', { class: 'page-head' },
       h('div', {}, h('h1', {}, def.title), h('div', { class: 'sub' }, def.hint)),
       h('div', { class: 'actions' },
-        gf ? h('select', { style: 'width:auto', dataset: { fk: 'group' }, onchange: (ev) => { simpleGroup = ev.target.value; reload(); } },
-          options(groups.map((g) => ({ value: g, label: g })), simpleGroup, { blank: `All ${gf === 'category' ? 'categories' : gf}` })) : null,
+        filters.map((f) => h('select', {
+          style: 'width:auto', 'aria-label': f.all, dataset: { fk: `filter-${f.field}` },
+          onchange: (ev) => { simpleGroups[f.field] = ev.target.value; reload(); },
+        }, options(valuesOf(f.field).map((v) => ({ value: v, label: f.labels ? f.labels[v] || v : v })), simpleGroups[f.field] || '', { blank: f.all }))),
         def.search ? h('input', {
-          placeholder: 'Search…', style: 'width:240px', value: simpleFilter, dataset: { fk: 'search' },
+          placeholder: tr('Search…'), style: 'width:240px', value: simpleFilter, dataset: { fk: 'search' },
           oninput: (ev) => { simpleFilter = ev.target.value; reload(); },
         }) : null,
         def.headActions ? def.headActions(reload, matched) : null)),
     ...(before || []),
     h('div', { class: 'panel' },
       def.tableTitle ? h('div', { class: 'panel-head' }, h('h2', {}, def.tableTitle)) : null,
-      (gf || def.maxRows) ? h('div', { class: 'hint', style: 'margin-bottom:6px' },
-        `${matched.length} of ${rows.length} records`,
-        shown.length < matched.length ? ` — showing the first ${shown.length}; search or pick a category to narrow down.` : '') : null,
+      (filters.length || def.maxRows) ? h('div', { class: 'hint', style: 'margin-bottom:6px' },
+        tr('{n} of {total} records', { n: matched.length, total: rows.length }),
+        shown.length < matched.length ? tr(' — showing the first {n}; search or pick a category to narrow down.', { n: shown.length }) : '') : null,
       h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, def.cols.map((c) => h('th', { class: c.num || c.calc ? 'n' : '' }, c.label)), h('th', {}))),
       h('tbody', {}, newRow, bodyRows)))),
-    h('div', { class: 'hint' }, 'Edits save automatically when you leave a field. The highlighted top row adds a new record.'));
+    h('div', { class: 'hint' }, tr('Edits save automatically when you leave a field. The highlighted top row adds a new record.')));
 }
 
 
@@ -1195,19 +1230,19 @@ async function renderBurdenPanels(reload) {
   const b = await api('GET', '/burden');
   const save = (c, f) => async (ev) => {
     const v = ev.target.type === 'checkbox' ? (ev.target.checked ? 1 : 0) : ev.target.value;
-    try { await attempt(() => api('PUT', `/burden-components/${c.id}`, { [f]: v }), 'Saved'); } finally { reload(); }
+    try { await attempt(() => api('PUT', `/burden-components/${c.id}`, { [f]: v }), tr('Saved')); } finally { reload(); }
   };
   const rows = b.components.map((c) => h('tr', { class: c.active ? '' : 'subtle' },
-    h('td', { style: 'width:40px;text-align:center' }, h('input', { type: 'checkbox', checked: !!c.active, style: 'width:auto', title: 'Include', onchange: save(c, 'active') })),
+    h('td', { style: 'width:40px;text-align:center' }, h('input', { type: 'checkbox', checked: !!c.active, style: 'width:auto', title: tr('Include'), onchange: save(c, 'active') })),
     h('td', {}, h('input', { value: c.name, dataset: { fk: `b-${c.id}-n` }, onchange: save(c, 'name') })),
     h('td', { style: 'width:130px' }, h('select', { dataset: { fk: `b-${c.id}-k` }, onchange: save(c, 'kind') },
-      options([{ value: 'leave', label: 'Paid leave %' }, { value: 'charge', label: 'Charge %' }, { value: 'fixed', label: 'Fixed B/./hr' }], c.kind))),
+      options([{ value: 'leave', label: tr('Paid leave %') }, { value: 'charge', label: tr('Charge %') }, { value: 'fixed', label: tr('Fixed B/./hr') }], c.kind))),
     h('td', { style: 'width:90px' }, numInput(c.percent, { dataset: { fk: `b-${c.id}-p` }, onchange: save(c, 'percent') })),
     h('td', {}, h('input', { value: c.notes, dataset: { fk: `b-${c.id}-o` }, onchange: save(c, 'notes') })),
     h('td', { class: 'actions-cell' }, h('button', {
       class: 'icon danger', onclick: async () => {
-        if (!confirmBox(`Remove “${c.name}” from the burden?`)) return;
-        await attempt(() => api('DELETE', `/burden-components/${c.id}`), 'Removed');
+        if (!confirmBox(tr('Remove “{name}” from the burden?', { name: c.name }))) return;
+        await attempt(() => api('DELETE', `/burden-components/${c.id}`), tr('Removed'));
         reload();
       },
     }, '✕'))));
@@ -1216,38 +1251,38 @@ async function renderBurdenPanels(reload) {
   return [
     h('div', { class: 'panel' },
       h('div', { class: 'panel-head' },
-        h('h2', {}, 'Standard labor burden — cargas sociales y prestaciones'),
+        h('h2', {}, tr('Standard labor burden — cargas sociales y prestaciones')),
         h('div', { class: 'actions' },
           h('button', {
             onclick: async () => {
-              await attempt(() => api('POST', '/burden-components', { name: 'New item', kind: 'charge', percent: 0, sort: 900 }));
+              await attempt(() => api('POST', '/burden-components', { name: tr('New item'), kind: 'charge', percent: 0, sort: 900 }));
               reload();
             },
-          }, '+ Add item'),
+          }, tr('+ Add item')),
           h('button', {
             onclick: async () => {
-              if (!confirmBox('Replace all burden items with the Panama defaults?')) return;
-              await attempt(() => api('POST', '/burden/reset'), 'Reset to defaults');
+              if (!confirmBox(tr('Replace all burden items with the Panama defaults?'))) return;
+              await attempt(() => api('POST', '/burden/reset'), tr('Reset to defaults'));
               reload();
             },
-          }, 'Reset to Panama defaults'))),
+          }, tr('Reset to Panama defaults')))),
       h('div', { class: 'table-wrap' }, h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'Use'), h('th', {}, 'Item'), h('th', {}, 'Applies to'),
-          h('th', { class: 'n' }, 'Value'), h('th', {}, 'Basis / notes (Cl. = cláusula de la convención)'), h('th', {}))),
+        h('thead', {}, h('tr', {}, h('th', {}, tr('Use')), h('th', {}, tr('Item')), h('th', {}, tr('Applies to')),
+          h('th', { class: 'n' }, tr('Value')), h('th', {}, tr('Basis / notes (Cl. = cláusula de la convención)')), h('th', {}))),
         h('tbody', {}, rows))),
       h('div', { class: 'preview-box' },
-        h('div', {}, h('span', {}, 'Paid leave (L)'), h('b', {}, fmtN(b.leave_pct, 2) + '%')),
-        h('div', {}, h('span', {}, 'Charges (C)'), h('b', {}, fmtN(b.charge_pct, 2) + '%')),
-        h('div', {}, h('span', {}, 'Standard burden = L + (1+L)·C'), h('b', { style: 'font-size:18px' }, fmtN(b.total_pct, 2) + '%')),
-        h('div', {}, h('span', {}, 'Fixed costs (F)'), h('b', {}, money(b.fixed_hr) + '/hr')),
-        h('div', {}, h('span', {}, `Albañil calificado ${money(ref)} → loaded`), h('b', {}, money(ref * (1 + b.total_pct / 100) + b.fixed_hr) + '/hr'))),
+        h('div', {}, h('span', {}, tr('Paid leave (L)')), h('b', {}, fmtN(b.leave_pct, 2) + '%')),
+        h('div', {}, h('span', {}, tr('Charges (C)')), h('b', {}, fmtN(b.charge_pct, 2) + '%')),
+        h('div', {}, h('span', {}, tr('Standard burden = L + (1+L)·C')), h('b', { style: 'font-size:18px' }, fmtN(b.total_pct, 2) + '%')),
+        h('div', {}, h('span', {}, tr('Fixed costs (F)')), h('b', {}, money(b.fixed_hr) + '/hr')),
+        h('div', {}, h('span', {}, tr('Albañil calificado {wage} → loaded', { wage: money(ref) })), h('b', {}, money(ref * (1 + b.total_pct / 100) + b.fixed_hr) + '/hr'))),
       h('div', { class: 'hint', style: 'margin-top:8px' },
-        'Loaded rate = wage × (1 + burden) + F. Paid leave is time paid but not worked, so it is spread over the hours actually worked. Charges (CSS, seguro educativo, riesgos profesionales, XIII mes…) apply to wage plus paid leave. Fixed items are B/. per hour worked. Defaults come from the Código de Trabajo, Ley 462 de 2025 and the CAPAC–SUNTRACS convention; confirm them with your accountant and your CSS statement.')),
+        tr('Loaded rate = wage × (1 + burden) + F. Paid leave is time paid but not worked, so it is spread over the hours actually worked. Charges (CSS, seguro educativo, riesgos profesionales, XIII mes…) apply to wage plus paid leave. Fixed items are B/. per hour worked. Defaults come from the Código de Trabajo, Ley 462 de 2025 and the CAPAC–SUNTRACS convention; confirm them with your accountant and your CSS statement.'))),
     h('div', { class: 'panel' },
       h('div', { class: 'panel-head' },
-        h('h2', {}, 'Other convention costs (outside the burden)'),
+        h('h2', {}, tr('Other convention costs (outside the burden)')),
         h('span', { class: 'hint' }, `${b.convention.name} — ${b.convention.step}`)),
-      h('ul', { class: 'hint', style: 'margin:0;padding-left:18px;line-height:1.7' }, b.other_costs.map((t) => h('li', {}, t)))),
+      h('ul', { class: 'hint', style: 'margin:0;padding-left:18px;line-height:1.7' }, b.other_costs.map((t) => h('li', {}, LANG === 'es' ? t.es : t.en)))),
   ];
 }
 
@@ -1258,7 +1293,7 @@ function applyTheme(t) {
   if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
   else document.documentElement.removeAttribute('data-theme');
   const btn = document.getElementById('theme-btn');
-  if (btn) btn.textContent = `Theme: ${t}`;
+  if (btn) btn.textContent = tr('Theme: {theme}', { theme: tr(t) });
 }
 let themeChoice = (() => {
   try { const t = localStorage.getItem('kotiza-theme'); return THEMES.includes(t) ? t : 'system'; } catch (_) { return 'system'; }
@@ -1268,6 +1303,20 @@ document.getElementById('theme-btn')?.addEventListener('click', () => {
   themeChoice = THEMES[(THEMES.indexOf(themeChoice) + 1) % THEMES.length];
   try { localStorage.setItem('kotiza-theme', themeChoice); } catch (_) { /* private mode: applies to this visit only */ }
   applyTheme(themeChoice);
+});
+
+// ---------------------------------------------------------------- header labels and language switch
+
+document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = tr(el.dataset.i18n); });
+document.querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', tr(el.dataset.i18nAria)); });
+document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = tr(el.dataset.i18nTitle); });
+document.querySelectorAll('#lang-switch button').forEach((btn) => {
+  btn.setAttribute('aria-pressed', btn.dataset.lang === LANG ? 'true' : 'false');
+  btn.addEventListener('click', () => {
+    if (btn.dataset.lang === LANG) return;
+    try { localStorage.setItem('kotiza-lang', btn.dataset.lang); } catch (_) { return toast('Your browser blocked saving the language choice.', true); }
+    location.reload();
+  });
 });
 
 // ---------------------------------------------------------------- start

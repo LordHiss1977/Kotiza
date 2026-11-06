@@ -10,7 +10,7 @@ import sqlite3
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from . import calc, db, rates_pa
 
@@ -348,24 +348,44 @@ def duplicate_estimate(conn, estimate_id):
     return {"id": new_id}
 
 
-def export_csv(conn, estimate_id):
+CSV_ES = {
+    "Estimate": "Presupuesto", "Client": "Cliente", "Location": "Ubicación", "Date": "Fecha",
+    "Currency": "Moneda", "BILL OF QUANTITIES": "LISTA DE CANTIDADES Y PRECIOS", "Item": "Ítem",
+    "Code": "Código", "Description": "Descripción", "Unit": "Unidad", "Quantity": "Cantidad",
+    "Crew": "Cuadrilla", "Rate/day": "Rendimiento/día", "Crew-days": "Días-cuadrilla",
+    "Labor": "Mano de obra", "Equipment": "Equipo", "Materials": "Materiales",
+    "Consumables": "Consumibles", "Direct cost": "Costo directo", "Unit cost": "Costo unitario",
+    "Bid unit price": "Precio unitario de licitación", "Bid total": "Total licitación",
+    "INDIRECT COSTS": "COSTOS INDIRECTOS", "Category": "Categoría", "Method": "Método",
+    "Rate": "Tarifa", "Percent": "Porcentaje", "Amount": "Monto", "SUMMARY": "RESUMEN",
+    "Total direct cost": "Total costo directo", "Indirect costs": "Costos indirectos",
+    "Total cost": "Costo total", "Contingency": "Imprevistos",
+    "Overhead (home office)": "Gastos generales (oficina)", "Profit": "Utilidad", "Bonds": "Fianzas",
+    "Price before tax": "Precio sin impuesto", "Tax": "Impuesto", "CONTRACT PRICE": "PRECIO DEL CONTRATO",
+    "K factor (price before tax / direct)": "Factor K (precio sin impuesto / directo)",
+    "lump": "cantidad × tarifa", "pct_direct": "% del costo directo", "pct_labor": "% de la mano de obra",
+}
+
+
+def export_csv(conn, estimate_id, lang="en"):
     full = calc.load_estimate(conn, estimate_id)
     if not full:
         raise ApiError(404, "Not found")
+    L = (lambda x: CSV_ES.get(x, x)) if lang == "es" else (lambda x: x)
     e, s = full["estimate"], full["summary"]
     buf = io.StringIO()
     w = csv.writer(buf)
     r2 = lambda x: round(x, 2)
-    w.writerow(["Estimate", e["name"]])
-    w.writerow(["Client", e["client"]])
-    w.writerow(["Location", e["location"]])
-    w.writerow(["Date", e["estimate_date"]])
-    w.writerow(["Currency", e["currency"]])
+    w.writerow([L("Estimate"), e["name"]])
+    w.writerow([L("Client"), e["client"]])
+    w.writerow([L("Location"), e["location"]])
+    w.writerow([L("Date"), e["estimate_date"]])
+    w.writerow([L("Currency"), e["currency"]])
     w.writerow([])
-    w.writerow(["BILL OF QUANTITIES"])
-    w.writerow(["Item", "Code", "Description", "Unit", "Quantity", "Crew", "Rate/day",
-                "Crew-days", "Labor", "Equipment", "Materials", "Consumables",
-                "Direct cost", "Unit cost", "Bid unit price", "Bid total"])
+    w.writerow([L("BILL OF QUANTITIES")])
+    w.writerow([L(x) for x in ("Item", "Code", "Description", "Unit", "Quantity", "Crew", "Rate/day",
+                               "Crew-days", "Labor", "Equipment", "Materials", "Consumables",
+                               "Direct cost", "Unit cost", "Bid unit price", "Bid total")])
     for n, t in enumerate(full["tasks"], 1):
         c = t["calc"]
         w.writerow([n, t["code"], t["description"], t["unit"], t["quantity"], t["crew_code"],
@@ -373,25 +393,25 @@ def export_csv(conn, estimate_id):
                     r2(c["equipment"]), r2(c["material"]), r2(c["consumable"]), r2(c["direct"]),
                     r2(c["unit_cost"]), r2(c["bid_unit_price"]), r2(c["bid_total"])])
     w.writerow([])
-    w.writerow(["INDIRECT COSTS"])
-    w.writerow(["Description", "Category", "Method", "Unit", "Quantity", "Rate", "Percent",
-                "Amount"])
+    w.writerow([L("INDIRECT COSTS")])
+    w.writerow([L(x) for x in ("Description", "Category", "Method", "Unit", "Quantity", "Rate",
+                               "Percent", "Amount")])
     for i in full["indirects"]:
-        w.writerow([i["description"], i["category"], i["method"], i["unit"], i["quantity"],
+        w.writerow([i["description"], i["category"], L(i["method"]), i["unit"], i["quantity"],
                     i["rate"], i["percent"], r2(i["amount"])])
     w.writerow([])
-    w.writerow(["SUMMARY"])
+    w.writerow([L("SUMMARY")])
     for label, key in (("Labor", "labor"), ("Equipment", "equipment"),
                        ("Materials", "material"), ("Consumables", "consumable"),
                        ("Total direct cost", "direct"), ("Indirect costs", "indirect"),
                        ("Total cost", "cost")):
-        w.writerow([label, r2(s[key])])
+        w.writerow([L(label), r2(s[key])])
     for m in s["markups"]:
-        w.writerow([f"{m['label']} ({m['percent']}%)", r2(m["amount"])])
-    w.writerow(["Price before tax", r2(s["price_before_tax"])])
-    w.writerow([f"Tax ({s['tax_pct']}%)", r2(s["tax"])])
-    w.writerow(["CONTRACT PRICE", r2(s["contract_price"])])
-    w.writerow(["K factor (price before tax / direct)", round(s["k_factor"], 4)])
+        w.writerow([f"{L(m['label'])} ({m['percent']}%)", r2(m["amount"])])
+    w.writerow([L("Price before tax"), r2(s["price_before_tax"])])
+    w.writerow([f"{L('Tax')} ({s['tax_pct']}%)", r2(s["tax"])])
+    w.writerow([L("CONTRACT PRICE"), r2(s["contract_price"])])
+    w.writerow([L("K factor (price before tax / direct)"), round(s["k_factor"], 4)])
     return buf.getvalue()
 
 
@@ -763,7 +783,8 @@ class Handler(BaseHTTPRequestHandler):
         if m and method == "GET":
             conn = db.connect(self.db_path)
             try:
-                text = export_csv(conn, int(m.group(1)))
+                lang = parse_qs(urlparse(self.path).query).get("lang", ["en"])[0]
+                text = export_csv(conn, int(m.group(1)), lang)
             except ApiError as e:
                 return self._send(e.status, {"error": e.message})
             finally:

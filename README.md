@@ -115,6 +115,7 @@ Kotiza's identity (logo, colours, type, components) is documented in the Kotiza 
 
 - Logo files used by the app are in `kotiza/static/brand/`. `brand/generate_logo.py` draws them from geometry, so the mark can be regenerated or adjusted exactly.
 - `kotiza/static/style.css` defines the design-system tokens and both themes: **Concreto** (light) and **Obra** (dark). The header's **Theme** button cycles system / light / dark and remembers your choice. Printed reports always use the light theme with the full-colour logo.
+- **Language**: the **ES | EN** switch in the header changes every label, message and the estimate's CSV export. Spanish is the default; the choice is remembered in the browser. Translations live in `kotiza/static/i18n.js`, keyed by the English text, so a missing translation falls back to English.
 - Fonts (Barlow Semi Condensed, Public Sans, IBM Plex Mono) load from Google Fonts. Offline, the app falls back to system fonts and keeps working.
 
 ## Project layout

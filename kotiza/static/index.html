@@ -13,31 +13,39 @@
   <script>
     // Apply a saved theme choice before the page paints (system / light / dark).
     try { var t = localStorage.getItem('kotiza-theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+    try { document.documentElement.lang = localStorage.getItem('kotiza-lang') === 'en' ? 'en' : 'es'; } catch (e) {}
   </script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header class="topbar no-print">
-    <a class="brand" href="#/estimates" aria-label="Kotiza — estimates">
+    <a class="brand" href="#/estimates" aria-label="Kotiza — estimates" data-i18n-aria="Kotiza — estimates">
       <img class="lockup" src="/brand/kotiza-lockup-reverse.svg" alt="Kotiza">
       <img class="mark" src="/brand/kotiza-mark-reverse.svg" alt="Kotiza">
     </a>
-    <nav aria-label="Sections">
-      <a href="#/estimates" data-nav="estimates">Estimates</a>
-      <span class="nav-sep">Database</span>
-      <a href="#/db/library" data-nav="library">Task library</a>
-      <a href="#/db/crews" data-nav="crews">Crews</a>
-      <a href="#/db/labor" data-nav="labor">Labor</a>
-      <a href="#/db/equipment" data-nav="equipment">Equipment</a>
-      <a href="#/db/materials" data-nav="materials">Materials</a>
-      <a href="#/db/indirect-library" data-nav="indirect-library">Indirects</a>
-      <a href="#/db/units" data-nav="units">Units</a>
+    <nav aria-label="Sections" data-i18n-aria="Sections">
+      <a href="#/estimates" data-nav="estimates" data-i18n="Estimates">Estimates</a>
+      <span class="nav-sep" data-i18n="Database">Database</span>
+      <a href="#/db/library" data-nav="library" data-i18n="Task library">Task library</a>
+      <a href="#/db/crews" data-nav="crews" data-i18n="Crews">Crews</a>
+      <a href="#/db/labor" data-nav="labor" data-i18n="Labor">Labor</a>
+      <a href="#/db/equipment" data-nav="equipment" data-i18n="Equipment">Equipment</a>
+      <a href="#/db/materials" data-nav="materials" data-i18n="Materials">Materials</a>
+      <a href="#/db/indirect-library" data-nav="indirect-library" data-i18n="Indirects">Indirects</a>
+      <a href="#/db/units" data-nav="units" data-i18n="Units">Units</a>
     </nav>
-    <button id="theme-btn" class="theme-btn" type="button" title="Switch between system, light and dark themes">Theme: system</button>
+    <div class="header-tools">
+      <div id="lang-switch" class="lang-switch" role="group" aria-label="Switch language" data-i18n-aria="Switch language">
+        <button type="button" data-lang="es" lang="es">ES</button>
+        <button type="button" data-lang="en" lang="en">EN</button>
+      </div>
+      <button id="theme-btn" class="theme-btn" type="button" title="Switch between system, light and dark themes" data-i18n-title="Switch between system, light and dark themes">Theme: system</button>
+    </div>
   </header>
   <main id="app"></main>
   <div id="toast" class="toast no-print" role="status" aria-live="polite"></div>
   <dialog id="modal"></dialog>
+  <script src="/i18n.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

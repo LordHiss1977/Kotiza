@@ -381,8 +381,8 @@ def load_capac_rendimientos(conn):
             f"Anexo IA CAPAC-SUNTRACS: rendimiento MÍNIMO de {rate:.2f} {unit} por jornada de 8 h"
             f" (umbral de prima de producción: {bonus:.2f}).",
             f"{cond.rstrip('.')}." if cond else "",
-            "Your crews usually exceed the minimum; adjust from your own records.",
-            "Labor only: add materials and consumables.") if x)
+            "Tus cuadrillas normalmente superan el mínimo; ajústalo con tus propios registros.",
+            "Solo mano de obra: agrega materiales y consumibles.") if x)
         row = conn.execute("SELECT id FROM task_library WHERE code = ?", (code,)).fetchone()
         vals = (desc, f"Rendimientos {cat}", unit, crew_ids[crew], round(rate, 3), notes)
         if row:
