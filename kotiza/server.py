@@ -838,6 +838,7 @@ def main(argv=None):
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--db", default=None, help=f"SQLite file (default {db.DEFAULT_DB})")
+    p.add_argument("--open", action="store_true", help="open the app in the web browser")
     a = p.parse_args(argv)
     srv = None
     for port in range(a.port, a.port + 20):
@@ -853,6 +854,9 @@ def main(argv=None):
     print(f"Kotiza running at http://{a.host}:{port}  (database: {a.db or db.DEFAULT_DB})")
     if port != a.port:
         print(f"NOTE: using port {port} because {a.port} was busy - open http://{a.host}:{port}")
+    if a.open:
+        import webbrowser
+        webbrowser.open(f"http://{a.host}:{port}")
     print("Press Ctrl+C to stop.")
     try:
         srv.serve_forever()
