@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS labor (
     category    TEXT NOT NULL DEFAULT '',  -- e.g. convention wage category
     base_rate   REAL NOT NULL DEFAULT 0,   -- wage per hour (private works)
     public_rate REAL NOT NULL DEFAULT 0,   -- wage per hour on public works (0 = same)
+    special_rate REAL NOT NULL DEFAULT 0,  -- special projects, Cl. 127 (0 = private + 11%)
     use_standard_burden INTEGER NOT NULL DEFAULT 1,  -- 1 = use burden calculator
     burden_pct  REAL NOT NULL DEFAULT 0    -- custom burden when not standard
 );
@@ -40,8 +41,8 @@ CREATE TABLE IF NOT EXISTS burden_components (
     id       INTEGER PRIMARY KEY,
     sort     INTEGER NOT NULL DEFAULT 0,
     name     TEXT NOT NULL,
-    kind     TEXT NOT NULL DEFAULT 'charge' CHECK (kind IN ('leave', 'charge')),
-    percent  REAL NOT NULL DEFAULT 0,
+    kind     TEXT NOT NULL DEFAULT 'charge' CHECK (kind IN ('leave', 'charge', 'fixed')),
+    percent  REAL NOT NULL DEFAULT 0,      -- % for leave/charge, B/. per hour for fixed
     active   INTEGER NOT NULL DEFAULT 1,
     notes    TEXT NOT NULL DEFAULT ''
 );
@@ -125,7 +126,7 @@ CREATE TABLE IF NOT EXISTS estimates (
     estimate_date    TEXT NOT NULL DEFAULT '',
     currency         TEXT NOT NULL DEFAULT 'USD',
     wage_scale       TEXT NOT NULL DEFAULT 'private'
-                     CHECK (wage_scale IN ('private', 'public')),
+                     CHECK (wage_scale IN ('private', 'public', 'special')),
     status           TEXT NOT NULL DEFAULT 'draft',
     hours_per_day    REAL NOT NULL DEFAULT 8,
     contingency_pct  REAL NOT NULL DEFAULT 0,
@@ -198,7 +199,46 @@ MIGRATIONS = [
     # Existing trades keep their own burden % until switched to standard.
     ("labor", "use_standard_burden", "INTEGER NOT NULL DEFAULT 0"),
     ("estimates", "wage_scale", "TEXT NOT NULL DEFAULT 'private'"),
+    ("labor", "special_rate", "REAL NOT NULL DEFAULT 0"),
 ]
+
+# Tables whose CHECK constraints were widened: (table, text the current definition contains).
+# Older databases are rebuilt with the current definition, keeping all rows.
+REBUILDS = [
+    ("burden_components", "'fixed'"),
+    ("estimates", "'special'"),
+]
+
+
+def _table_ddl(table):
+    start = SCHEMA.index(f"CREATE TABLE IF NOT EXISTS {table} (")
+    return SCHEMA[start:SCHEMA.index(");", start) + 2]
+
+
+def rebuild_outdated_tables(conn):
+    todo = []
+    for table, marker in REBUILDS:
+        row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                           (table,)).fetchone()
+        if row and "CHECK" in row[0] and marker not in row[0]:
+            todo.append(table)
+    if not todo:
+        return
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        for table in todo:
+            old_cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+            conn.execute(_table_ddl(table).replace(
+                f"CREATE TABLE IF NOT EXISTS {table} (", f"CREATE TABLE {table}__new ("))
+            new_cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table}__new)")}
+            cols = ", ".join(c for c in old_cols if c in new_cols)
+            conn.execute(f"INSERT INTO {table}__new ({cols}) SELECT {cols} FROM {table}")
+            conn.execute(f"DROP TABLE {table}")
+            conn.execute(f"ALTER TABLE {table}__new RENAME TO {table}")
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def migrate(conn):
@@ -212,6 +252,8 @@ def init_db(conn, seed=True):
     """Create tables, upgrade older databases, load sample data if empty."""
     conn.executescript(SCHEMA)
     migrate(conn)
+    rebuild_outdated_tables(conn)
+    conn.executescript(SCHEMA)  # recreate indexes dropped with rebuilt tables
     if conn.execute("SELECT COUNT(*) FROM burden_components").fetchone()[0] == 0:
         seed_burden(conn)
     empty = conn.execute("SELECT COUNT(*) FROM labor").fetchone()[0] == 0
@@ -226,28 +268,84 @@ def seed_burden(conn):
         rates_pa.BURDEN_COMPONENTS)
 
 
-def standard_burden_pct(conn):
+def standard_burden(conn):
+    """Returns (burden %, fixed B/. per hour) from the burden calculator."""
     comps = [dict(r) for r in conn.execute("SELECT kind, percent, active FROM burden_components")]
-    return rates_pa.total_burden(comps)[2]
+    _, _, pct, fixed = rates_pa.total_burden(comps)
+    return pct, fixed
+
+
+def _ensure_units(conn, codes):
+    names = {"ml": "metro lineal", "und": "unidad"}
+    for code in codes:
+        conn.execute("INSERT OR IGNORE INTO units(code, name) VALUES (?, ?)", (code, names.get(code, code)))
 
 
 def load_capac_rates(conn):
-    """Insert or update the convention trades (matched by code).
-    Returns (inserted, updated)."""
+    """Insert or update the convention trades (matched by code), plus the
+    convention's indirect items. Returns (inserted, updated)."""
     ins = upd = 0
-    for code, trade, category, _note in rates_pa.TRADES:
-        priv, pub = rates_pa.CATEGORY_RATES[category]
+    for code, trade, group, priv, pub, special in rates_pa.TRADES:
         row = conn.execute("SELECT id FROM labor WHERE code = ?", (code,)).fetchone()
         if row:
             conn.execute(
                 "UPDATE labor SET trade = ?, category = ?, base_rate = ?, public_rate = ?,"
-                " use_standard_burden = 1 WHERE id = ?", (trade, category, priv, pub, row[0]))
+                " special_rate = ?, use_standard_burden = 1 WHERE id = ?",
+                (trade, group, priv, pub, special, row[0]))
             upd += 1
         else:
             conn.execute(
-                "INSERT INTO labor(code, trade, category, base_rate, public_rate,"
-                " use_standard_burden, burden_pct) VALUES (?,?,?,?,?,1,0)",
-                (code, trade, category, priv, pub))
+                "INSERT INTO labor(code, trade, category, base_rate, public_rate, special_rate,"
+                " use_standard_burden, burden_pct) VALUES (?,?,?,?,?,?,1,0)",
+                (code, trade, group, priv, pub, special))
+            ins += 1
+    for desc, cat, method, unit, rate, pct in rates_pa.INDIRECT_ITEMS:
+        if not conn.execute("SELECT 1 FROM indirect_library WHERE description = ?", (desc,)).fetchone():
+            conn.execute(
+                "INSERT INTO indirect_library(description, category, method, unit, rate, percent)"
+                " VALUES (?,?,?,?,?,?)", (desc, cat, method, unit, rate, pct))
+    return ins, upd
+
+
+def load_capac_rendimientos(conn):
+    """Add the Anexo IA productivity table as crews + standard tasks (matched
+    by code; existing ones are updated). Returns (tasks added, tasks updated)."""
+    lab = {r[0]: r[1] for r in conn.execute("SELECT code, id FROM labor")}
+    needed = {c for _, _, members in rates_pa.RENDIMIENTO_CREWS for c, _ in members}
+    if needed - lab.keys():
+        load_capac_rates(conn)
+        lab = {r[0]: r[1] for r in conn.execute("SELECT code, id FROM labor")}
+    crew_ids = {}
+    for code, name, members in rates_pa.RENDIMIENTO_CREWS:
+        row = conn.execute("SELECT id FROM crews WHERE code = ?", (code,)).fetchone()
+        if row:
+            cid = row[0]
+        else:
+            cid = conn.execute(
+                "INSERT INTO crews(code, name, description) VALUES (?,?,?)",
+                (code, name, "Personal base del Anexo IA, Convención CAPAC-SUNTRACS")).lastrowid
+            for lc, qty in members:
+                conn.execute("INSERT INTO crew_labor(crew_id, labor_id, qty) VALUES (?,?,?)",
+                             (cid, lab[lc], qty))
+        crew_ids[code] = cid
+    _ensure_units(conn, {r[5] for r in rates_pa.RENDIMIENTOS})
+    ins = upd = 0
+    for code, cat, desc, cond, crew, unit, rate, bonus in rates_pa.RENDIMIENTOS:
+        notes = " ".join(x for x in (
+            f"Anexo IA CAPAC-SUNTRACS: rendimiento MÍNIMO de {rate:.2f} {unit} por jornada de 8 h"
+            f" (umbral de prima de producción: {bonus:.2f}).",
+            f"{cond.rstrip('.')}." if cond else "",
+            "Your crews usually exceed the minimum; adjust from your own records.",
+            "Labor only: add materials and consumables.") if x)
+        row = conn.execute("SELECT id FROM task_library WHERE code = ?", (code,)).fetchone()
+        vals = (desc, f"Rendimientos {cat}", unit, crew_ids[crew], round(rate, 3), notes)
+        if row:
+            conn.execute("UPDATE task_library SET description = ?, category = ?, unit = ?,"
+                         " crew_id = ?, production_rate = ?, notes = ? WHERE id = ?", (*vals, row[0]))
+            upd += 1
+        else:
+            conn.execute("INSERT INTO task_library(code, description, category, unit, crew_id,"
+                         " production_rate, notes) VALUES (?,?,?,?,?,?,?)", (code, *vals))
             ins += 1
     return ins, upd
 
@@ -400,3 +498,6 @@ def seed_sample_data(conn):
             "INSERT INTO estimate_indirects(estimate_id, seq, description, category, method,"
             " unit, quantity, rate, percent) VALUES (?,?,?,?,?,?,?,?,?)",
             (eid, seq, d, cat, m, u, q, r, p))
+
+    # Productivity library from the convention (Anexo IA).
+    load_capac_rendimientos(conn)

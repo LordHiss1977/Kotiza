@@ -105,10 +105,11 @@ METHODS = ("lump", "pct_direct", "pct_labor")
 SIMPLE = {
     "units": ("units", {"code": "str", "name": "str"}, ("code",), "code"),
     "labor": ("labor", {"code": "str", "trade": "str", "category": "str", "base_rate": "num",
-                        "public_rate": "num", "use_standard_burden": "num", "burden_pct": "num"},
+                        "public_rate": "num", "special_rate": "num",
+                        "use_standard_burden": "num", "burden_pct": "num"},
               ("code", "trade"), "code"),
     "burden-components": ("burden_components", {"sort": "num", "name": "str",
-                                                "kind": ("enum", ("leave", "charge")),
+                                                "kind": ("enum", ("leave", "charge", "fixed")),
                                                 "percent": "num", "active": "num",
                                                 "notes": "str"},
                           ("name",), "sort, id"),
@@ -129,7 +130,7 @@ CREW_SPEC = {"code": "str", "name": "str", "description": "str"}
 LIB_SPEC = {"code": "str", "description": "str", "category": "str", "unit": "str",
             "crew_id": "ref", "production_rate": "num", "notes": "str"}
 EST_SPEC = {"name": "str", "client": "str", "location": "str", "estimate_date": "str",
-            "currency": "str", "wage_scale": ("enum", ("private", "public")),
+            "currency": "str", "wage_scale": ("enum", ("private", "public", "special")),
             "status": "str", "hours_per_day": "num",
             "contingency_pct": "num", "overhead_pct": "num", "profit_pct": "num",
             "bond_pct": "num", "tax_pct": "num", "notes": "str"}
@@ -143,21 +144,26 @@ def list_simple(conn, res):
     table, _, _, order = SIMPLE[res]
     rows = [dict(r) for r in conn.execute(f"SELECT * FROM {table} ORDER BY {order}")]
     if res == "labor":
-        std = db.standard_burden_pct(conn)
+        std = db.standard_burden(conn)
         for r in rows:
-            b = std if r["use_standard_burden"] else r["burden_pct"]
-            pub = r["public_rate"] or r["base_rate"]
-            r["effective_burden"] = b
-            r["loaded_rate"] = r["base_rate"] * (1 + b / 100)
-            r["loaded_public"] = pub * (1 + b / 100)
+            e = calc.effective_labor(r, "private", std)
+            r["effective_burden"] = e["burden_pct"]
+            r["fixed_hr"] = e["fixed_hr"]
+            for scale, key in (("private", "loaded_rate"), ("public", "loaded_public"),
+                               ("special", "loaded_special")):
+                w = calc.scale_wage(r, scale)
+                r[key] = w * (1 + e["burden_pct"] / 100) + e["fixed_hr"]
     return rows
 
 
 def burden_summary(conn):
     comps = [dict(r) for r in conn.execute("SELECT * FROM burden_components ORDER BY sort, id")]
-    leave, charge, total = rates_pa.total_burden(comps)
+    leave, charge, total, fixed = rates_pa.total_burden(comps)
+    sample = {t[0]: t for t in rates_pa.TRADES}
     return {"components": comps, "leave_pct": leave, "charge_pct": charge, "total_pct": total,
-            "convention": rates_pa.CONVENTION, "category_rates": rates_pa.CATEGORY_RATES}
+            "fixed_hr": fixed, "convention": rates_pa.CONVENTION,
+            "reference_wage": sample["MAS"][3],
+            "other_costs": rates_pa.OTHER_CONVENTION_COSTS}
 
 
 # --------------------------------------------------------------------------
@@ -444,6 +450,12 @@ def _burden_reset(conn, body):
 @route("POST", "/api/labor/load-capac")
 def _load_capac(conn, body):
     ins, upd = db.load_capac_rates(conn)
+    return {"inserted": ins, "updated": upd}
+
+
+@route("POST", "/api/library/load-rendimientos")
+def _load_rend(conn, body):
+    ins, upd = db.load_capac_rendimientos(conn)
     return {"inserted": ins, "updated": upd}
 
 

@@ -56,7 +56,8 @@ def compute_crew(crew):
     labor_hr = 0.0
     headcount = 0.0
     for m in crew.get("labor", []):
-        m["loaded_rate"] = _f(m.get("base_rate")) * (1 + _f(m.get("burden_pct")) / 100)
+        m["loaded_rate"] = (_f(m.get("base_rate")) * (1 + _f(m.get("burden_pct")) / 100)
+                            + _f(m.get("fixed_hr")))
         m["cost_hr"] = _f(m.get("qty")) * m["loaded_rate"]
         labor_hr += m["cost_hr"]
         headcount += _f(m.get("qty"))
@@ -192,19 +193,34 @@ def compute_estimate(estimate, tasks, crews, indirects):
 # Database loaders
 # --------------------------------------------------------------------------
 
+SPECIAL_UPLIFT = 11.0  # Cl. 127 CAPAC-SUNTRACS: special projects = private + 11%
+
+
 def standard_burden(conn):
+    """(burden %, fixed per hour) from the burden calculator."""
     from . import db
-    return db.standard_burden_pct(conn)
+    return db.standard_burden(conn)
+
+
+def scale_wage(r, scale):
+    """Hourly wage for a labor row on the given wage scale."""
+    base = _f(r.get("base_rate"))
+    if scale == "public" and _f(r.get("public_rate")) > 0:
+        return _f(r["public_rate"])
+    if scale == "special":
+        return _f(r.get("special_rate")) or base * (1 + SPECIAL_UPLIFT / 100)
+    return base
 
 
 def effective_labor(row, scale, std_burden):
-    """Resolve the wage (private/public scale) and burden % actually used."""
+    """Resolve the wage (private/public/special scale) and burden actually used.
+    std_burden = (pct, fixed per hour)."""
     r = dict(row)
     r["wage_private"] = r["base_rate"]
-    if scale == "public" and _f(r.get("public_rate")) > 0:
-        r["base_rate"] = r["public_rate"]
+    r["base_rate"] = scale_wage(r, scale)
+    r["fixed_hr"] = 0.0
     if r.get("use_standard_burden"):
-        r["burden_pct"] = std_burden
+        r["burden_pct"], r["fixed_hr"] = std_burden
     return r
 
 
@@ -218,7 +234,7 @@ def load_crew(conn, crew_id, scale="private", std_burden=None):
     crew["wage_scale"] = scale
     crew["labor"] = [effective_labor(r, scale, std_burden) for r in conn.execute(
         "SELECT cl.id, cl.labor_id, cl.qty, l.code, l.trade, l.category, l.base_rate,"
-        " l.public_rate, l.use_standard_burden, l.burden_pct"
+        " l.public_rate, l.special_rate, l.use_standard_burden, l.burden_pct"
         " FROM crew_labor cl JOIN labor l ON l.id = cl.labor_id"
         " WHERE cl.crew_id = ? ORDER BY cl.id", (crew_id,))]
     crew["equipment"] = [dict(r) for r in conn.execute(

@@ -51,18 +51,32 @@ contract price    = price before tax × (1 + tax)
 
 ## Panama labor rates (CAPAC–SUNTRACS)
 
-The **Labor** page has three parts:
+Source: `capac-convenio-colectiva-2022-2025.pdf` (in this repository). The data is in `kotiza/rates_pa.py`.
 
-1. **Standard labor burden (cargas sociales y prestaciones).** Every item can be edited or switched off:
-   - **Paid leave** items are % of wage: vacaciones 9.09%, feriados ≈4%, optional sick leave.
-   - **Charges** are % of wage + paid leave: CSS 13.25% (Ley 462 de 2025; 14.25% from March 2027), seguro educativo 1.5%, riesgos profesionales (your CSS class), XIII mes 8.33%, CSS on XIII 0.90%, prima de antigüedad 1.92%, convention benefits.
-   - Standard burden = L + (1 + L) × C, which is about 48.8% with the defaults.
-2. **Convention reference.** The 2022–2025 category minimums at the July 2025 step, for private and public works.
-3. **Trades.** Each trade has a private-works wage and a public-works wage, and uses either the standard burden or its own custom %. **Load CAPAC–SUNTRACS rates** fills in the convention trades, matched by code, without touching other trades.
+**Labor page**
+- **Load CAPAC–SUNTRACS rates** loads every occupation in Cláusulas 125–127 at the 1 July 2025 step. Each one gets three wages:
+  - private works (Cl. 125)
+  - public works (Cl. 126)
+  - special projects (Cl. 127: Metro lines, 4th bridge, etc. = private + 11%)
+  
+  Trades are matched by code, so existing crews stay linked.
+- **Standard labor burden** is an editable list of items. Loaded rate = wage × (1 + L + (1 + L) × C) + F, which is about 56.8% + B/.0.05/hr with the defaults.
 
-Each estimate chooses **private** or **public** works in its project details, and its crews are costed with the matching wages.
+  | Type | Defaults |
+  |---|---|
+  | **Paid leave** (L) | vacaciones 9.09%; 12 paid holidays incl. 25 October (Cl. 124) 4.36%; attendance bonus (Cl. 114) 5.77% |
+  | **Charges** (C) | CSS 13.25% (Ley 462 de 2025; 14.25% from March 2027); seguro educativo 1.5%; riesgos profesionales; XIII mes 8.33% and its CSS 0.90%; prima de antigüedad provision 1.92% (see Cl. 21/123) |
+  | **Fixed B/. per hour** (F) | life insurance (Cl. 81); uniforms (Cl. 43) |
 
-The convention figures live in `kotiza/rates_pa.py`. When the 2026–2029 convention is signed, update the wages there (or on the Labor page) and press the button again. **Verify all figures against the official signed table and your CSS statement before bidding.**
+- **Other convention costs** that belong in indirects or specific tasks are listed on the page: tools, heights, rain, and so on.
+
+Each estimate chooses **private**, **public** or **special project** wages in its project details.
+
+**Task library**
+- **Load CAPAC–SUNTRACS productivity (Anexo IA)** adds the minimum-output table as ~65 labor-only standard tasks (codes `RM-…`). It also adds the convention crews (`CV-…`, for example "Albañil + 0.50 peón").
+- The rates are the contractual **minimums** per 8-hour day. Real crews usually do better, so adjust them from your own records and add materials and consumables.
+
+When the 2026–2029 convention is signed, update `rates_pa.py` and press the buttons again.
 
 ## Workflow
 

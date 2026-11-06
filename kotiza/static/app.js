@@ -295,7 +295,7 @@ function drawEstimate() {
             }, options(STATUSES.map((s) => ({ value: s, label: s })), e.status))),
             field('Wage scale (CAPAC–SUNTRACS)', h('select', {
               dataset: { fk: 'est-wage_scale' }, onchange: (ev) => saveEstimateField('wage_scale', ev.target.value),
-            }, options([{ value: 'private', label: 'Private works (inversión privada)' }, { value: 'public', label: 'Public works (inversión pública)' }], e.wage_scale))),
+            }, options([{ value: 'private', label: 'Private works (Cl. 125)' }, { value: 'public', label: 'Public works (Cl. 126)' }, { value: 'special', label: 'Special project +11% (Cl. 127)' }], e.wage_scale))),
             est('hours_per_day', 'Working hours / day', 'num'),
             est('notes', 'Notes / scope assumptions', 'textarea', 'wide'))),
         drawTasksPanel(),
@@ -897,10 +897,13 @@ function editCrew(crew) {
 
 // ================================================================ TASK LIBRARY
 
+let libraryFilter = '';
+
 async function renderLibrary() {
   await loadRefs('library', 'crews', 'materials', 'units');
   money = moneyFmt('USD');
-  const list = refs.library;
+  const q = libraryFilter.toLowerCase();
+  const list = q ? refs.library.filter((t) => [t.code, t.description, t.category, t.crew_name].join(' ').toLowerCase().includes(q)) : refs.library;
   const edit = (t) => openTaskEditor({
     mode: 'library',
     task: t || { code: '', description: '', category: '', unit: 'm2', crew_id: null, production_rate: 0, resources: [] },
@@ -918,13 +921,26 @@ async function renderLibrary() {
     h('div', { class: 'page-head' },
       h('div', {}, h('h1', {}, 'Task library'),
         h('div', { class: 'sub' }, 'Standard tasks (unit-price analyses) you can drop into any estimate. Changes here do not alter tasks already in estimates.')),
-      h('button', { class: 'primary', onclick: () => edit(null) }, '+ New standard task')),
+      h('div', { class: 'actions' },
+        h('input', {
+          placeholder: 'Search…', style: 'width:220px', value: libraryFilter, dataset: { fk: 'lib-search' },
+          oninput: (ev) => { libraryFilter = ev.target.value; keepFocus(renderLibrary); },
+        }),
+        h('button', {
+          onclick: async () => {
+            if (!confirmBox('Load the CAPAC–SUNTRACS minimum productivity table (Anexo IA)?\n\nAdds ~65 labor-only standard tasks (codes RM-…) and the matching crews (CV-…). Re-loading updates them; your own tasks are not touched.')) return;
+            const r = await attempt(() => api('POST', '/library/load-rendimientos'));
+            toast(`Productivity table loaded: ${r.inserted} added, ${r.updated} updated`);
+            renderLibrary();
+          },
+        }, 'Load CAPAC–SUNTRACS productivity (Anexo IA)'),
+        h('button', { class: 'primary', onclick: () => edit(null) }, '+ New standard task'))),
     h('div', { class: 'panel' }, h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', {}, 'Code'), h('th', {}, 'Description'), h('th', {}, 'Category'),
         h('th', {}, 'Unit'), h('th', {}, 'Crew'), h('th', { class: 'n' }, 'Rate/day'),
         h('th', { class: 'n' }, 'Resources'), h('th', { class: 'n' }, 'Direct unit cost*'), h('th', {}))),
       h('tbody', {}, list.length ? list.map((t) => h('tr', {},
-        h('td', { class: 'code' }, t.code), h('td', {}, h('b', {}, t.description)), h('td', {}, t.category),
+        h('td', { class: 'code' }, t.code), h('td', { title: t.notes }, h('b', {}, t.description)), h('td', {}, t.category),
         h('td', {}, t.unit), h('td', {}, t.crew_name || '—'), h('td', { class: 'n' }, fmtQ(t.production_rate)),
         h('td', { class: 'n' }, t.resources.length), h('td', { class: 'n' }, money(t.unit_cost_preview)),
         h('td', { class: 'actions-cell' }, h('button', { onclick: () => edit(t) }, 'Edit'), ' ',
@@ -944,29 +960,30 @@ async function renderLibrary() {
 const SIMPLE = {
   labor: {
     title: 'Labor trades', path: '/labor', search: true,
-    hint: 'Hourly wage (private and public works) plus burden. Trades on “Standard” burden use the calculator above; the loaded rate is what crews cost.',
+    hint: 'Hourly wage for private works, public works and special projects (Cl. 127: Metro, 4th bridge… = private + 11%), plus burden. The loaded rate is what crews cost.',
     tableTitle: 'Trades',
     before: renderBurdenPanels,
     headActions: (reload) => h('button', {
       class: 'primary', onclick: async () => {
-        if (!confirmBox('Load the CAPAC–SUNTRACS convention wages?\n\nTrades are matched by code (HLP, PRI, MAS, CAR, IRW, PLU, ELE, WEL, PNT, OPR). Existing ones get updated wages and switch to Standard burden; missing ones are added. Other trades are not touched.')) return;
+        if (!confirmBox('Load the CAPAC–SUNTRACS convention wages (Cl. 125–127, July 2025)?\n\nAll occupations are matched by code. Existing ones get the convention wages (private, public, special projects) and switch to Standard burden; missing ones are added. Trades with other codes are not touched.')) return;
         const r = await attempt(() => api('POST', '/labor/load-capac'));
         toast(`CAPAC–SUNTRACS rates loaded: ${r.updated} updated, ${r.inserted} added`);
         reload();
       },
     }, 'Load CAPAC–SUNTRACS rates'),
     cols: [
-      { f: 'code', label: 'Code', w: 80 }, { f: 'trade', label: 'Trade' },
-      { f: 'category', label: 'Category', w: 150, list: 'labor-cats' },
-      { f: 'base_rate', label: 'Wage / hr private', num: true, w: 105 },
-      { f: 'public_rate', label: 'Wage / hr public', num: true, w: 105 },
-      { f: 'use_standard_burden', label: 'Burden', w: 115, select: [['1', 'Standard'], ['0', 'Custom']] },
-      { f: 'burden_pct', label: 'Custom %', num: true, w: 85, disabled: (r) => String(r.use_standard_burden) === '1' },
-      { calc: (r) => (r.effective_burden === undefined ? '' : fmtN(r.effective_burden, 2) + '%'), label: 'Burden used' },
+      { f: 'code', label: 'Code', w: 75 }, { f: 'trade', label: 'Occupation' },
+      { f: 'category', label: 'Group', w: 150 },
+      { f: 'base_rate', label: 'Wage private', num: true, w: 80 },
+      { f: 'public_rate', label: 'Wage public', num: true, w: 80 },
+      { f: 'special_rate', label: 'Wage special', num: true, w: 80 },
+      { f: 'use_standard_burden', label: 'Burden', w: 105, select: [['1', 'Standard'], ['0', 'Custom']] },
+      { f: 'burden_pct', label: 'Custom %', num: true, w: 70, disabled: (r) => String(r.use_standard_burden) === '1' },
       { calc: (r) => (r.loaded_rate === undefined ? '' : money(r.loaded_rate)), label: 'Loaded private' },
       { calc: (r) => (r.loaded_public === undefined ? '' : money(r.loaded_public)), label: 'Loaded public' },
+      { calc: (r) => (r.loaded_special === undefined ? '' : money(r.loaded_special)), label: 'Loaded special' },
     ],
-    blank: { code: '', trade: '', category: 'Calificado', base_rate: 0, public_rate: 0, use_standard_burden: 1, burden_pct: 0 },
+    blank: { code: '', trade: '', category: '', base_rate: 0, public_rate: 0, special_rate: 0, use_standard_burden: 1, burden_pct: 0 },
   },
   equipment: {
     title: 'Equipment', path: '/equipment',
@@ -1099,7 +1116,7 @@ async function renderBurdenPanels(reload) {
     h('td', { style: 'width:40px;text-align:center' }, h('input', { type: 'checkbox', checked: !!c.active, style: 'width:auto', title: 'Include', onchange: save(c, 'active') })),
     h('td', {}, h('input', { value: c.name, dataset: { fk: `b-${c.id}-n` }, onchange: save(c, 'name') })),
     h('td', { style: 'width:130px' }, h('select', { dataset: { fk: `b-${c.id}-k` }, onchange: save(c, 'kind') },
-      options([{ value: 'leave', label: 'Paid leave' }, { value: 'charge', label: 'Charge' }], c.kind))),
+      options([{ value: 'leave', label: 'Paid leave %' }, { value: 'charge', label: 'Charge %' }, { value: 'fixed', label: 'Fixed B/./hr' }], c.kind))),
     h('td', { style: 'width:90px' }, numInput(c.percent, { dataset: { fk: `b-${c.id}-p` }, onchange: save(c, 'percent') })),
     h('td', {}, h('input', { value: c.notes, dataset: { fk: `b-${c.id}-o` }, onchange: save(c, 'notes') })),
     h('td', { class: 'actions-cell' }, h('button', {
@@ -1110,7 +1127,7 @@ async function renderBurdenPanels(reload) {
       },
     }, '✕'))));
 
-  const cats = Object.entries(b.category_rates);
+  const ref = b.reference_wage;
   return [
     h('div', { class: 'panel' },
       h('div', { class: 'panel-head' },
@@ -1131,24 +1148,21 @@ async function renderBurdenPanels(reload) {
           }, 'Reset to Panama defaults'))),
       h('div', { class: 'table-wrap' }, h('table', {},
         h('thead', {}, h('tr', {}, h('th', {}, 'Use'), h('th', {}, 'Item'), h('th', {}, 'Applies to'),
-          h('th', { class: 'n' }, '%'), h('th', {}, 'Basis / notes'), h('th', {}))),
+          h('th', { class: 'n' }, 'Value'), h('th', {}, 'Basis / notes (Cl. = cláusula de la convención)'), h('th', {}))),
         h('tbody', {}, rows))),
       h('div', { class: 'preview-box' },
         h('div', {}, h('span', {}, 'Paid leave (L)'), h('b', {}, fmtN(b.leave_pct, 2) + '%')),
         h('div', {}, h('span', {}, 'Charges (C)'), h('b', {}, fmtN(b.charge_pct, 2) + '%')),
         h('div', {}, h('span', {}, 'Standard burden = L + (1+L)·C'), h('b', { style: 'font-size:18px' }, fmtN(b.total_pct, 2) + '%')),
-        h('div', {}, h('span', {}, 'Calificado private, loaded'), h('b', {}, money((b.category_rates.Calificado || [0])[0] * (1 + b.total_pct / 100)) + '/hr'))),
+        h('div', {}, h('span', {}, 'Fixed costs (F)'), h('b', {}, money(b.fixed_hr) + '/hr')),
+        h('div', {}, h('span', {}, `Albañil calificado ${money(ref)} → loaded`), h('b', {}, money(ref * (1 + b.total_pct / 100) + b.fixed_hr) + '/hr'))),
       h('div', { class: 'hint', style: 'margin-top:8px' },
-        'Paid leave is time paid but not worked, so it is spread over the hours actually worked. Charges (CSS, seguro educativo, riesgos profesionales, XIII mes, prima de antigüedad…) apply to wage plus paid leave. Defaults are a starting point: confirm them with your accountant and your CSS statement.')),
+        'Loaded rate = wage × (1 + burden) + F. Paid leave is time paid but not worked, so it is spread over the hours actually worked. Charges (CSS, seguro educativo, riesgos profesionales, XIII mes…) apply to wage plus paid leave. Fixed items are B/. per hour worked. Defaults come from the Código de Trabajo, Ley 462 de 2025 and the CAPAC–SUNTRACS convention; confirm them with your accountant and your CSS statement.')),
     h('div', { class: 'panel' },
       h('div', { class: 'panel-head' },
-        h('h2', {}, 'Convention reference'),
+        h('h2', {}, 'Other convention costs (outside the burden)'),
         h('span', { class: 'hint' }, `${b.convention.name} — ${b.convention.step}`)),
-      h('table', { style: 'max-width:620px' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Category'), h('th', { class: 'n' }, 'Private works / hr'), h('th', { class: 'n' }, 'Public works / hr'))),
-        h('tbody', {}, cats.map(([name, [pv, pb]]) => h('tr', {}, h('td', {}, name), h('td', { class: 'n' }, money(pv)), h('td', { class: 'n' }, money(pb)))))),
-      h('div', { class: 'hint', style: 'margin-top:8px' },
-        'Category-level minimums. The official table lists individual occupations, some of them above these rates: verify each trade against the signed table and update the wages below.')),
+      h('ul', { class: 'hint', style: 'margin:0;padding-left:18px;line-height:1.7' }, b.other_costs.map((t) => h('li', {}, t)))),
   ];
 }
 
