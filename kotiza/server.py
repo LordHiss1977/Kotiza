@@ -118,7 +118,8 @@ SIMPLE = {
     "materials": ("materials", {"code": "str", "description": "str",
                                 "kind": ("enum", ("material", "consumable")),
                                 "category": "str", "unit": "str",
-                                "unit_cost": "num", "waste_pct": "num"},
+                                "unit_cost": "num", "waste_pct": "num",
+                                "source": "str", "price_date": "str", "notes": "str"},
                   ("code", "description"), "kind, category, code"),
     "indirect-library": ("indirect_library", {"description": "str", "category": "str",
                                               "method": ("enum", METHODS), "unit": "str",
@@ -453,6 +454,96 @@ def _load_capac(conn, body):
     return {"inserted": ins, "updated": upd}
 
 
+MATERIAL_CSV_COLS = ["code", "description", "kind", "category", "unit", "unit_cost", "waste_pct",
+                     "source", "price_date", "notes"]
+
+
+def export_materials_csv(conn):
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(MATERIAL_CSV_COLS)
+    for r in conn.execute(f"SELECT {', '.join(MATERIAL_CSV_COLS)} FROM materials ORDER BY category, code"):
+        w.writerow(list(r))
+    return buf.getvalue()
+
+
+def import_materials_csv(conn, text, default_source="", default_date=""):
+    """Upsert materials from CSV text (header row required; 'code' plus any of
+    MATERIAL_CSV_COLS; comma or semicolon separated). Returns a summary."""
+    text = text.lstrip("\ufeff")
+    try:
+        dialect = csv.Sniffer().sniff(text.splitlines()[0] if text else ",", delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    rows = list(csv.DictReader(io.StringIO(text), dialect=dialect))
+    if not rows or "code" not in {(k or "").strip().lower() for k in rows[0]}:
+        raise ApiError(400, "The CSV needs a header row with at least a 'code' column "
+                            f"(columns: {', '.join(MATERIAL_CSV_COLS)}).")
+    spec = SIMPLE["materials"][1]
+    ins = upd = 0
+    errors = []
+    for n, raw in enumerate(rows, 2):
+        row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw.items()}
+        row = {k: v for k, v in row.items() if k in MATERIAL_CSV_COLS and v != ""}
+        code = row.get("code")
+        if not code:
+            continue
+        if "unit_cost" in row:
+            row["unit_cost"] = row["unit_cost"].replace("B/.", "").replace("$", "").replace(",", "")
+        if row.get("kind") and row["kind"] not in ("material", "consumable"):
+            row["kind"] = "consumable" if row["kind"].lower().startswith("c") else "material"
+        if "unit_cost" in row:
+            row.setdefault("source", default_source)
+            row.setdefault("price_date", default_date)
+        try:
+            data = clean(row, spec, partial=True)
+        except ApiError as e:
+            errors.append(f"line {n} ({code}): {e.message}")
+            continue
+        existing = conn.execute("SELECT id FROM materials WHERE code = ?", (code,)).fetchone()
+        if existing:
+            update(conn, "materials", existing[0], data)
+            upd += 1
+        elif not data.get("description"):
+            errors.append(f"line {n} ({code}): new material needs a description")
+        else:
+            insert(conn, "materials", data)
+            ins += 1
+    return {"inserted": ins, "updated": upd, "errors": errors[:20], "error_count": len(errors)}
+
+
+@route("POST", "/api/materials/adjust")
+def _adjust_materials(conn, body):
+    """Escalate prices of the given materials by a percentage, recording why."""
+    ids = [int(i) for i in body.get("ids") or []]
+    pct = _num(body.get("percent"), "percent")
+    note = (body.get("note") or "").strip()
+    if not ids or pct == 0:
+        raise ApiError(400, "Select some materials and a non-zero percentage")
+    if pct <= -100:
+        raise ApiError(400, "Percentage must be greater than -100")
+    today = body.get("price_date") or ""
+    tag = f"{'+' if pct > 0 else ''}{pct:g}%" + (f" ({note})" if note else "")
+    for i in ids:
+        conn.execute(
+            "UPDATE materials SET unit_cost = ROUND(unit_cost * ?, 4), price_date = COALESCE(NULLIF(?, ''), price_date),"
+            " source = CASE WHEN source = '' THEN ? ELSE source || ' ' || ? END WHERE id = ?",
+            (1 + pct / 100, today, tag, tag, i))
+    return {"updated": len(ids)}
+
+
+@route("POST", "/api/materials/load-cgr")
+def _load_cgr(conn, body):
+    ins, upd, skipped = db.load_cgr_materials(conn)
+    return {"inserted": ins, "updated": upd, "skipped": skipped}
+
+
+@route("POST", "/api/materials/import")
+def _import_materials(conn, body):
+    return import_materials_csv(conn, body.get("csv") or "", (body.get("source") or "").strip(),
+                                (body.get("price_date") or "").strip())
+
+
 @route("POST", "/api/library/load-rendimientos")
 def _load_rend(conn, body):
     ins, upd = db.load_capac_rendimientos(conn)
@@ -658,6 +749,15 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "Invalid JSON"})
             if not isinstance(body, dict):
                 return self._send(400, {"error": "Expected a JSON object"})
+
+        if path == "/api/materials/export.csv" and method == "GET":
+            conn = db.connect(self.db_path)
+            try:
+                text = export_materials_csv(conn)
+            finally:
+                conn.close()
+            return self._send(200, "\ufeff" + text, "text/csv; charset=utf-8",
+                              {"Content-Disposition": 'attachment; filename="kotiza-materials.csv"'})
 
         m = re.match(r"^/api/estimates/(\d+)/export\.csv$", path)
         if m and method == "GET":

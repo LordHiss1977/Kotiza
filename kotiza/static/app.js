@@ -121,6 +121,7 @@ const REF_PATHS = {
 async function loadRefs(...keys) {
   await Promise.all(keys.map(async (k) => { refs[k] = await api('GET', REF_PATHS[k]); }));
 }
+const matLabel = (m) => `${m.code} — ${m.description} (${m.unit}, ${fmtN(m.unit_cost)})`;
 const byId = (list, id) => (list || []).find((x) => String(x.id) === String(id));
 
 function unitDatalist() {
@@ -453,10 +454,15 @@ function openTaskEditor({ mode, task, hpd, title, onSave, onDelete, onToLibrary 
       if (!m && r._kind !== kind) return;
       const perUnit = m ? num(r.qty_per_unit) * (1 + num(m.waste_pct) / 100) * num(m.unit_cost) : 0;
       rows.push(h('tr', {},
-        h('td', {}, h('select', {
-          dataset: { fk: `res-${idx}-m` },
-          onchange: (ev) => { r.material_id = ev.target.value; draw(); },
-        }, options(mats.map((x) => ({ value: x.id, group: x.category, label: `${x.code} — ${x.description}` })), r.material_id, { blank: '— select —' }))),
+        h('td', {}, h('input', {
+          list: `mat-list-${kind}`, placeholder: 'Type a code or part of the name…',
+          value: m ? matLabel(m) : '', dataset: { fk: `res-${idx}-m` },
+          onchange: (ev) => {
+            const v = ev.target.value.trim();
+            const hit = mats.find((x) => matLabel(x) === v) || mats.find((x) => x.code.toLowerCase() === v.toLowerCase());
+            if (hit) { r.material_id = hit.id; draw(); } else if (v) toast('No matching item — pick one from the list', true);
+          },
+        })),
         h('td', { style: 'width:120px' }, numInput(r.qty_per_unit, {
           dataset: { fk: `res-${idx}-q` },
           onchange: (ev) => { r.qty_per_unit = ev.target.value; draw(); },
@@ -499,6 +505,8 @@ function openTaskEditor({ mode, task, hpd, title, onSave, onDelete, onToLibrary 
     const crewOpts = (refs.crews || []).map((c) => ({ value: c.id, label: `${c.code} — ${c.name} (${money(c.hourly_cost)}/hr)` }));
     const body = h('div', {},
       unitDatalist(),
+      ['material', 'consumable'].map((k) => h('datalist', { id: `mat-list-${k}` },
+        (refs.materials || []).filter((x) => x.kind === k).map((x) => h('option', { value: matLabel(x) })))),
       h('div', { class: 'grid' },
         field('Code', h('input', { value: st.code, dataset: { fk: 't-code' }, oninput: set('code') })),
         field('Description', h('input', { value: st.description, dataset: { fk: 't-desc' }, oninput: set('description') }), 'wide'),
@@ -995,17 +1003,23 @@ const SIMPLE = {
     blank: { code: '', description: '', hourly_rate: 0 },
   },
   materials: {
-    title: 'Materials & consumables', path: '/materials', search: true,
-    hint: 'Materials are incorporated into the work; consumables are used up doing it (wire, nails, discs, form oil…). Waste % is added to quantities.',
+    title: 'Materials & consumables', path: '/materials', search: true, groupFilter: 'category', maxRows: 250,
+    hint: 'Materials are incorporated into the work; consumables are used up doing it (wire, nails, discs…). Waste % is added to quantities. Changing a price stamps today’s date; prices older than a year are flagged.',
+    headActions: materialsActions,
+    // Editing a price records when it was updated.
+    extraOnChange: (f) => (f === 'unit_cost' ? { price_date: new Date().toISOString().slice(0, 10) } : {}),
     cols: [
-      { f: 'code', label: 'Code', w: 100 }, { f: 'description', label: 'Description' },
-      { f: 'kind', label: 'Type', w: 130, select: [['material', 'Material'], ['consumable', 'Consumable']] },
-      { f: 'category', label: 'Category', w: 130 },
-      { f: 'unit', label: 'Unit', w: 80, units: true },
-      { f: 'unit_cost', label: 'Unit cost', num: true, w: 120 },
-      { f: 'waste_pct', label: 'Waste %', num: true, w: 90 },
+      { f: 'code', label: 'Code', w: 105 },
+      { f: 'description', label: 'Description', title: (r) => r.notes },
+      { f: 'kind', label: 'Type', w: 115, select: [['material', 'Material'], ['consumable', 'Consumable']] },
+      { f: 'category', label: 'Category', w: 150, list: 'mat-cats' },
+      { f: 'unit', label: 'Unit', w: 70, units: true },
+      { f: 'unit_cost', label: 'Unit cost', num: true, w: 95 },
+      { f: 'waste_pct', label: 'Waste %', num: true, w: 70 },
+      { f: 'source', label: 'Price source', w: 140 },
+      { f: 'price_date', label: 'Price date', w: 135, type: 'date', tdClass: (r) => (priceAgeDays(r.price_date) > 365 ? 'stale' : '') },
     ],
-    blank: { code: '', description: '', kind: 'material', category: '', unit: 'ea', unit_cost: 0, waste_pct: 0 },
+    blank: { code: '', description: '', kind: 'material', category: '', unit: 'und', unit_cost: 0, waste_pct: 0, source: '', price_date: '' },
   },
   'indirect-library': {
     title: 'Indirect cost library', path: '/indirect-library',
@@ -1029,6 +1043,60 @@ const SIMPLE = {
 
 let simpleFilter = '';
 let simpleFilterKey = '';
+let simpleGroup = '';
+let simpleGroupKey = '';
+
+function priceAgeDays(d) {
+  if (!d) return Infinity;
+  const t = Date.parse(d);
+  return Number.isFinite(t) ? (Date.now() - t) / 86400000 : Infinity;
+}
+
+function materialsActions(reload, matched) {
+  const file = h('input', {
+    type: 'file', accept: '.csv,text/csv', style: 'display:none',
+    onchange: async (ev) => {
+      const f = ev.target.files[0];
+      if (!f) return;
+      const text = await f.text();
+      const source = prompt('Price source for these rows (supplier, quote no.…) — used where the CSV has no "source" column:', f.name.replace(/\.csv$/i, ''));
+      if (source === null) return;
+      const r = await attempt(() => api('POST', '/materials/import', { csv: text, source, price_date: new Date().toISOString().slice(0, 10) }));
+      toast(`Imported: ${r.updated} updated, ${r.inserted} added${r.error_count ? `, ${r.error_count} rows with errors` : ''}`, r.error_count > 0);
+      if (r.error_count) alert('Rows not imported:\n\n' + r.errors.join('\n') + (r.error_count > r.errors.length ? `\n…and ${r.error_count - r.errors.length} more` : ''));
+      reload();
+    },
+  });
+  return [
+    h('button', {
+      class: 'primary', onclick: async () => {
+        if (!confirmBox('Load the Contraloría reference prices (Base de Datos de Costos Directos v002, July 2025)?\n\n870 materials used in public-works cost analyses for Panamá and Panamá Oeste. Rows previously loaded from this source are updated. Materials with the same code from other sources (your own prices) are not touched.')) return;
+        const r = await attempt(() => api('POST', '/materials/load-cgr'));
+        toast(`Contraloría prices: ${r.inserted} added, ${r.updated} updated${r.skipped.length ? `, ${r.skipped.length} skipped (code already used by your own material: ${r.skipped.slice(0, 5).join(', ')})` : ''}`);
+        reload();
+      },
+    }, 'Load Contraloría prices'),
+    h('button', {
+      title: 'Escalate the prices of the materials currently listed (use the category filter / search first), e.g. by an INEC price-index change',
+      onclick: async () => {
+        if (!matched.length) return toast('No materials listed', true);
+        const pct = prompt(`Adjust the price of the ${matched.length} listed materials by what percentage? (e.g. 7.5 or -3)`);
+        if (pct === null || !pct.trim()) return;
+        if (!Number.isFinite(parseFloat(pct))) return toast('Enter a number', true);
+        const note = prompt('Reason, saved with the price source (e.g. "INEC IPMC jul-2026"):', 'INEC IPMC');
+        if (note === null) return;
+        const r = await attempt(() => api('POST', '/materials/adjust', {
+          ids: matched.map((m) => m.id), percent: pct, note, price_date: new Date().toISOString().slice(0, 10),
+        }));
+        toast(`${r.updated} prices adjusted by ${pct}%`);
+        reload();
+      },
+    }, 'Adjust listed prices %…'),
+    h('a', { class: 'btn', href: '/api/materials/export.csv' }, 'Export CSV'),
+    h('button', { onclick: () => file.click(), title: 'CSV with a header row: code, description, kind, category, unit, unit_cost, waste_pct, source, price_date, notes. Rows are matched by code; only the columns present are updated.' }, 'Import CSV…'),
+    file,
+  ];
+}
 
 async function renderSimple(key) {
   const def = SIMPLE[key];
@@ -1044,13 +1112,20 @@ async function renderSimple(key) {
       return h('select', { dataset: { fk }, disabled, onchange: onChange }, options(col.select.map(([v, l]) => ({ value: v, label: l })), row[col.f]));
     }
     if (col.num) return numInput(row[col.f], { dataset: { fk }, disabled, onchange: onChange });
-    return h('input', { value: row[col.f], list: col.units ? 'units-list' : col.list || null, dataset: { fk }, disabled, onchange: onChange });
+    return h('input', {
+      value: row[col.f], type: col.type || 'text', list: col.units ? 'units-list' : col.list || null,
+      title: col.title ? col.title(row) || null : null, dataset: { fk }, disabled, onchange: onChange,
+    });
   };
 
   const q = simpleFilter.toLowerCase();
-  const shown = def.search && q
-    ? rows.filter((r) => Object.values(r).some((v) => String(v).toLowerCase().includes(q)))
-    : rows;
+  const gf = def.groupFilter;
+  if (simpleGroupKey !== key) { simpleGroup = ''; simpleGroupKey = key; }
+  const groups = gf ? [...new Set(rows.map((r) => r[gf]).filter(Boolean))].sort() : [];
+  const matched = rows
+    .filter((r) => !gf || !simpleGroup || r[gf] === simpleGroup)
+    .filter((r) => !(def.search && q) || Object.values(r).some((v) => String(v).toLowerCase().includes(q)));
+  const shown = def.maxRows ? matched.slice(0, def.maxRows) : matched;
 
   const reload = () => keepFocus(() => renderSimple(key));
 
@@ -1068,10 +1143,11 @@ async function renderSimple(key) {
     }, 'Add')));
 
   const bodyRows = shown.map((r) => h('tr', {},
-    def.cols.map((c) => h('td', { class: c.calc ? 'n' : '' },
+    def.cols.map((c) => h('td', { class: [c.calc ? 'n' : '', c.tdClass ? c.tdClass(r) : ''].join(' ').trim() || null },
       c.calc ? c.calc(r) : input(r, c, async (ev) => {
         try {
-          await attempt(() => api('PUT', `${def.path}/${r.id}`, { [c.f]: ev.target.value }), 'Saved');
+          const extra = def.extraOnChange ? def.extraOnChange(c.f) : {};
+          await attempt(() => api('PUT', `${def.path}/${r.id}`, { [c.f]: ev.target.value, ...extra }), 'Saved');
         } finally { reload(); }
       }))),
     h('td', { class: 'actions-cell' }, h('button', {
@@ -1085,18 +1161,23 @@ async function renderSimple(key) {
   const before = def.before ? await def.before(reload) : null;
   $app.replaceChildren(
     unitDatalist(),
-    h('datalist', { id: 'labor-cats' }, ['Ayudante general', 'Principiante', 'Calificado', 'Fuera de convención'].map((c) => h('option', { value: c }))),
+    h('datalist', { id: 'mat-cats' }, groups.map((c) => h('option', { value: c }))),
     h('div', { class: 'page-head' },
       h('div', {}, h('h1', {}, def.title), h('div', { class: 'sub' }, def.hint)),
       h('div', { class: 'actions' },
+        gf ? h('select', { style: 'width:auto', dataset: { fk: 'group' }, onchange: (ev) => { simpleGroup = ev.target.value; reload(); } },
+          options(groups.map((g) => ({ value: g, label: g })), simpleGroup, { blank: `All ${gf === 'category' ? 'categories' : gf}` })) : null,
         def.search ? h('input', {
           placeholder: 'Search…', style: 'width:240px', value: simpleFilter, dataset: { fk: 'search' },
           oninput: (ev) => { simpleFilter = ev.target.value; reload(); },
         }) : null,
-        def.headActions ? def.headActions(reload) : null)),
+        def.headActions ? def.headActions(reload, matched) : null)),
     ...(before || []),
     h('div', { class: 'panel' },
       def.tableTitle ? h('div', { class: 'panel-head' }, h('h2', {}, def.tableTitle)) : null,
+      (gf || def.maxRows) ? h('div', { class: 'hint', style: 'margin-bottom:6px' },
+        `${matched.length} of ${rows.length} records`,
+        shown.length < matched.length ? ` — showing the first ${shown.length}; search or pick a category to narrow down.` : '') : null,
       h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, def.cols.map((c) => h('th', { class: c.num || c.calc ? 'n' : '' }, c.label)), h('th', {}))),
       h('tbody', {}, newRow, bodyRows)))),

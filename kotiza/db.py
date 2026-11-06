@@ -12,6 +12,7 @@ Cost hierarchy stored here:
 All percentages are stored as plain numbers (55 means 55%).
 """
 
+import json
 import os
 import sqlite3
 
@@ -63,7 +64,10 @@ CREATE TABLE IF NOT EXISTS materials (
     category     TEXT NOT NULL DEFAULT '',
     unit         TEXT NOT NULL DEFAULT 'ea',
     unit_cost    REAL NOT NULL DEFAULT 0,
-    waste_pct    REAL NOT NULL DEFAULT 0
+    waste_pct    REAL NOT NULL DEFAULT 0,
+    source       TEXT NOT NULL DEFAULT '',  -- where the price came from (quote, list, CGR…)
+    price_date   TEXT NOT NULL DEFAULT '',  -- YYYY-MM-DD
+    notes        TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS crews (
@@ -200,6 +204,9 @@ MIGRATIONS = [
     ("labor", "use_standard_burden", "INTEGER NOT NULL DEFAULT 0"),
     ("estimates", "wage_scale", "TEXT NOT NULL DEFAULT 'private'"),
     ("labor", "special_rate", "REAL NOT NULL DEFAULT 0"),
+    ("materials", "source", "TEXT NOT NULL DEFAULT ''"),
+    ("materials", "price_date", "TEXT NOT NULL DEFAULT ''"),
+    ("materials", "notes", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 # Tables whose CHECK constraints were widened: (table, text the current definition contains).
@@ -276,9 +283,11 @@ def standard_burden(conn):
 
 
 def _ensure_units(conn, codes):
-    names = {"ml": "metro lineal", "und": "unidad"}
+    names = {"ml": "metro lineal", "und": "unidad", "saco": "saco", "pza": "pieza", "gal": "galón",
+             "rollo": "rollo", "lb": "libra", "ft": "pie", "ft3": "pie cúbico", "lt": "litro"}
     for code in codes:
         conn.execute("INSERT OR IGNORE INTO units(code, name) VALUES (?, ?)", (code, names.get(code, code)))
+    return None
 
 
 def load_capac_rates(conn):
@@ -305,6 +314,43 @@ def load_capac_rates(conn):
                 "INSERT INTO indirect_library(description, category, method, unit, rate, percent)"
                 " VALUES (?,?,?,?,?,?)", (desc, cat, method, unit, rate, pct))
     return ins, upd
+
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+CGR_MATERIALS = os.path.join(DATA_DIR, "materiales_cgr_2025.json")
+
+
+def load_cgr_materials(conn, path=CGR_MATERIALS):
+    """Load the Contraloría reference material prices. Rows are matched by
+    code: rows that came from the same source are updated, rows with that code
+    from any other source (your own prices) are left alone and reported.
+    Returns (inserted, updated, skipped_codes)."""
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    src = data["source_short"]
+    ins = upd = 0
+    skipped = []
+    units = set()
+    for m in data["materials"]:
+        notes = f"Used in {m['uses']} CGR analyses, e.g. {m['example']}"
+        row = conn.execute("SELECT id, source FROM materials WHERE code = ?", (m["code"],)).fetchone()
+        vals = (m["description"], m["kind"], m["category"], m["unit"], m["unit_cost"], src,
+                data["price_date"], notes)
+        if row and row["source"] != src:
+            skipped.append(m["code"])
+            continue
+        if row:
+            conn.execute("UPDATE materials SET description = ?, kind = ?, category = ?, unit = ?,"
+                         " unit_cost = ?, source = ?, price_date = ?, notes = ? WHERE id = ?",
+                         (*vals, row["id"]))
+            upd += 1
+        else:
+            conn.execute("INSERT INTO materials(code, description, kind, category, unit, unit_cost,"
+                         " source, price_date, notes) VALUES (?,?,?,?,?,?,?,?,?)", (m["code"], *vals))
+            ins += 1
+        units.add(m["unit"])
+    _ensure_units(conn, units)
+    return ins, upd, skipped
 
 
 def load_capac_rendimientos(conn):
@@ -398,8 +444,8 @@ def seed_sample_data(conn):
         ("DSC", "Cutting disc 7\"", "consumable", "General", "ea", 4.00, 0),
     ]
     c.executemany(
-        "INSERT INTO materials(code, description, kind, category, unit, unit_cost, waste_pct)"
-        " VALUES (?,?,?,?,?,?,?)", materials)
+        "INSERT INTO materials(code, description, kind, category, unit, unit_cost, waste_pct, source)"
+        " VALUES (?,?,?,?,?,?,?,'Sample data')", materials)
 
     lab = {r["code"]: r["id"] for r in c.execute("SELECT id, code FROM labor")}
     eqp = {r["code"]: r["id"] for r in c.execute("SELECT id, code FROM equipment")}
@@ -501,3 +547,6 @@ def seed_sample_data(conn):
 
     # Productivity library from the convention (Anexo IA).
     load_capac_rendimientos(conn)
+
+    # Reference material prices from the Contraloría (public works, July 2025).
+    load_cgr_materials(conn)

@@ -255,5 +255,61 @@ class PanamaLaborTests(unittest.TestCase):
             self.assertAlmostEqual(rebar, 732.06 * 0.45359, places=2)
             conn.close()
 
+
+class MaterialsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = db.connect(os.path.join(self.tmp.name, "m.db"))
+        db.init_db(self.conn)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_cgr_catalog_loaded_and_idempotent(self):
+        with open(db.CGR_MATERIALS, encoding="utf-8") as fh:
+            data = json.load(fh)
+        n = len(data["materials"])
+        loaded = self.conn.execute("SELECT COUNT(*) FROM materials WHERE source = ?",
+                                   (data["source_short"],)).fetchone()[0]
+        # The sample 'DSC' (cutting disc) shares a code with the CGR catalog and is kept.
+        self.assertEqual(loaded, n - 1)
+        own = self.conn.execute("SELECT source FROM materials WHERE code = 'DSC'").fetchone()[0]
+        self.assertEqual(own, "Sample data")
+        ins, upd, skipped = db.load_cgr_materials(self.conn)
+        self.assertEqual((ins, upd, skipped), (0, n - 1, ["DSC"]))
+        cem = self.conn.execute("SELECT * FROM materials WHERE code = 'CEMENTO'").fetchone()
+        self.assertEqual((cem["unit"], cem["unit_cost"], cem["price_date"]), ("saco", 8.49, "2025-07-10"))
+
+    def test_csv_round_trip_and_import(self):
+        from kotiza import server
+        text = server.export_materials_csv(self.conn)
+        self.assertTrue(text.startswith("code,description"))
+        res = server.import_materials_csv(
+            self.conn,
+            "code;unit_cost;description\nCEMENTO;B/.8.95;\nNEW-1;12.5;Nuevo material\nNEW-2;3;\nBAD;abc;x\n",
+            "Cotización Cochez #123", "2026-11-06")
+        self.assertEqual((res["updated"], res["inserted"], res["error_count"]), (1, 1, 2))
+        cem = self.conn.execute("SELECT * FROM materials WHERE code = 'CEMENTO'").fetchone()
+        self.assertEqual((cem["unit_cost"], cem["source"], cem["price_date"], cem["description"]),
+                         (8.95, "Cotización Cochez #123", "2026-11-06", "CEMENTO GRIS TIPO I"))
+        # A later CGR reload must not overwrite a price the user replaced.
+        _, _, skipped = db.load_cgr_materials(self.conn)
+        self.assertIn("CEMENTO", skipped)
+
+
+    def test_adjust_prices(self):
+        from kotiza import server
+        ids = [r[0] for r in self.conn.execute("SELECT id FROM materials WHERE code IN ('IBC6', 'IA')")]
+        server._adjust_materials(self.conn, {"ids": ids, "percent": 10, "note": "INEC", "price_date": "2026-11-06"})
+        r = self.conn.execute("SELECT unit_cost, source FROM materials WHERE code = 'IBC6'").fetchone()
+        self.assertAlmostEqual(r["unit_cost"], 1.045)
+        self.assertIn("+10% (INEC)", r["source"])
+        _, _, skipped = db.load_cgr_materials(self.conn)     # adjusted prices are protected
+        self.assertIn("IBC6", skipped)
+        with self.assertRaises(server.ApiError):
+            server._adjust_materials(self.conn, {"ids": ids, "percent": -100})
+
+
 if __name__ == "__main__":
     unittest.main()

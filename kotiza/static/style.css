@@ -157,3 +157,4 @@ dialog::backdrop { background: rgba(15, 23, 30, .45); }
 table.dense td.actions-cell button.icon { padding: 2px 5px; }
 table.dense td.actions-cell { padding-right: 0; }
 input:disabled, select:disabled { background: #f0f2f4; color: #a3abb4; }
+td.stale input { background: var(--warn-bg); color: var(--warn); }

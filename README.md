@@ -78,6 +78,22 @@ Each estimate chooses **private**, **public** or **special project** wages in it
 
 When the 2026–2029 convention is signed, update `rates_pa.py` and press the buttons again.
 
+## Materials database
+
+- **Load Contraloría prices** loads 870 materials and consumables, each with code, unit, unit price, category, and an example of where it is used.
+  - Source: the Contraloría General de la República's *Base de Datos de Costos Directos*, versión 002 (10 July 2025, Panamá and Panamá Oeste, public works). These are the material prices behind its 1,169 official cost analyses.
+  - The data is in `kotiza/data/materiales_cgr_2025.json`.
+  - Quantities in those analyses already include waste, so these items have 0% waste.
+- **Every price records its source and date.** Editing a price stamps today's date, and prices older than a year are highlighted.
+- **Import CSV…** brings in supplier price lists or quotes.
+  - Needs a header row with `code` plus any of: `description, kind, category, unit, unit_cost, waste_pct, source, price_date, notes`.
+  - Accepts comma or semicolon separators.
+  - Rows are matched by code, and only the columns present are updated.
+  - **Export CSV** gives you the template.
+- **Adjust listed prices %…** escalates whatever the filter or search is showing. For example, apply INEC's construction-materials price index (IPMC) changes since July 2025. The adjustment is written into the price source.
+- **Your own prices are protected.** Reloading the Contraloría data only updates rows that still carry its source. Anything you edited, imported or adjusted is left alone.
+- **Finding materials in the task editor:** with ~900 materials, the picker is a type-to-search field. Type a code or part of the name.
+
 ## Workflow
 
 1. **Database:** set up labor, equipment, materials/consumables, and crews. Optionally, build standard tasks in the **Task library** and standard items in the **Indirects** library.
