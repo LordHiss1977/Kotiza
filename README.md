@@ -109,6 +109,14 @@ When the 2026–2029 convention is signed, update `rates_pa.py` and press the bu
 - Adding a task from the library **copies** it into the estimate. Editing the task inside the estimate does not change the library, and editing the library does not change estimates.
 - You can't delete a resource that a crew, task, or estimate still uses. The app tells you when this happens.
 
+## Brand
+
+Kotiza's identity (logo, colours, type, components) is documented in the Kotiza design system: https://claude.ai/artifact/RmNLd3aCBS5ieb3xYX7ftM
+
+- Logo files used by the app are in `kotiza/static/brand/`. `brand/generate_logo.py` draws them from geometry, so the mark can be regenerated or adjusted exactly.
+- `kotiza/static/style.css` defines the design-system tokens and both themes: **Concreto** (light) and **Obra** (dark). The header's **Theme** button cycles system / light / dark and remembers your choice. Printed reports always use the light theme with the full-colour logo.
+- Fonts (Barlow Semi Condensed, Public Sans, IBM Plex Mono) load from Google Fonts. Offline, the app falls back to system fonts and keeps working.
+
 ## Project layout
 
 ```

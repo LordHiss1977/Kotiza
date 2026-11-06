@@ -328,7 +328,7 @@ function drawTasksPanel() {
       h('td', { class: 'desc' }, t.description,
         c.warnings.map((w) => h('div', {}, h('span', { class: 'warn' }, '⚠ ' + w)))),
       h('td', {}, t.unit),
-      h('td', { style: 'width:90px' }, numInput(t.quantity, {
+      h('td', { style: 'width:76px' }, numInput(t.quantity, {
         dataset: { fk: `tq-${t.id}` },
         onchange: async (ev) => {
           await attempt(() => api('PUT', `/tasks/${t.id}`, { quantity: ev.target.value }), 'Saved');
@@ -751,6 +751,10 @@ async function renderReport(id) {
           }), 'Include internal cost analysis'),
           h('button', { class: 'primary', onclick: () => window.print() }, 'Print / Save PDF'))),
       h('div', { class: 'report' },
+        h('div', { class: 'report-brand' },
+          h('img', { class: 'logo-light', src: '/brand/kotiza-lockup.svg', alt: 'Kotiza' }),
+          h('img', { class: 'logo-dark', src: '/brand/kotiza-lockup-reverse.svg', alt: 'Kotiza' }),
+          h('span', {}, showApu ? 'Cost estimate · internal' : 'Quotation')),
         h('h1', {}, e.name),
         h('div', { class: 'meta' },
           h('div', {}, 'Client: ', h('b', {}, e.client || '—')),
@@ -1246,6 +1250,25 @@ async function renderBurdenPanels(reload) {
       h('ul', { class: 'hint', style: 'margin:0;padding-left:18px;line-height:1.7' }, b.other_costs.map((t) => h('li', {}, t)))),
   ];
 }
+
+// ---------------------------------------------------------------- theme (system / light / dark)
+
+const THEMES = ['system', 'light', 'dark'];
+function applyTheme(t) {
+  if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  else document.documentElement.removeAttribute('data-theme');
+  const btn = document.getElementById('theme-btn');
+  if (btn) btn.textContent = `Theme: ${t}`;
+}
+let themeChoice = (() => {
+  try { const t = localStorage.getItem('kotiza-theme'); return THEMES.includes(t) ? t : 'system'; } catch (_) { return 'system'; }
+})();
+applyTheme(themeChoice);
+document.getElementById('theme-btn')?.addEventListener('click', () => {
+  themeChoice = THEMES[(THEMES.indexOf(themeChoice) + 1) % THEMES.length];
+  try { localStorage.setItem('kotiza-theme', themeChoice); } catch (_) { /* private mode: applies to this visit only */ }
+  applyTheme(themeChoice);
+});
 
 // ---------------------------------------------------------------- start
 router();
