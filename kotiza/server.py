@@ -839,8 +839,20 @@ def main(argv=None):
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--db", default=None, help=f"SQLite file (default {db.DEFAULT_DB})")
     a = p.parse_args(argv)
-    srv = make_server(a.host, a.port, a.db)
-    print(f"Kotiza running at http://{a.host}:{a.port}  (database: {a.db or db.DEFAULT_DB})")
+    srv = None
+    for port in range(a.port, a.port + 20):
+        try:
+            srv = make_server(a.host, port, a.db)
+            break
+        except OSError:
+            print(f"Port {port} is busy (is Kotiza already running in another window?) - trying {port + 1}...")
+    if srv is None:
+        print(f"No free port between {a.port} and {a.port + 19}. Close other copies of Kotiza and try again.")
+        return 1
+    port = srv.server_address[1]
+    print(f"Kotiza running at http://{a.host}:{port}  (database: {a.db or db.DEFAULT_DB})")
+    if port != a.port:
+        print(f"NOTE: using port {port} because {a.port} was busy - open http://{a.host}:{port}")
     print("Press Ctrl+C to stop.")
     try:
         srv.serve_forever()
